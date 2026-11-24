@@ -1,0 +1,32 @@
+/audio1/Audio Books
+================================================================================
+
+/audio1/Audio Books/A
+================================================================================
+
+/audio1/Audio Books/A/Aaron, Rachel
+================================================================================
+!TrainFiles f77467ded33c | Aaron, Rachel - DFZ Changeling 01 - By a Silver Thread (audiobook).zip ::INFO:: 306.00MB
+!TrainFiles e48187982e62 | Aaron, Rachel - Heartstrikers 01 - Nice Dragons Finish Last (audiobook).zip ::INFO:: 334.79MB
+!TrainFiles b1e13d7f6996 | Aaron, Rachel - Heartstrikers 02 - One Good Dragon Deserves Another (audiobook).zip ::INFO:: 492.98MB
+
+/audio1/Audio Books/A/Albom, Mitch
+================================================================================
+!TrainFiles e4659dcbb3d7 | Albom, Mitch - First Phone Call from Heaven.mp3 ::INFO:: 336.19MB
+!TrainFiles 923cb32a72be | Albom, Mitch - Five People You Meet in Heaven.mp3 ::INFO:: 71.59MB
+
+/audio1/Audio Books/M/Myerson, Julie/Myerson, Julie - The Stopped Heart
+================================================================================
+!TrainFiles 0000000000a1 | The Stopped Heart-Cover.jpg ::INFO:: 120.50KB
+!TrainFiles 0000000000a2 | The Stopped Heart-Part01.mp3 ::INFO:: 55.10MB
+!TrainFiles 0000000000a3 | The Stopped Heart-Part02.mp3 ::INFO:: 54.90MB
+
+/shows/radio-etc/Charles Dickens/David Copperfield
+================================================================================
+!TrainFiles 0000000000b1 | 1 of 8.mp3 ::INFO:: 12.00MB
+!TrainFiles 0000000000b2 | 2 of 8.mp3 ::INFO:: 12.25MB
+
+/shows/radio-etc/Enchantment of Music
+================================================================================
+!TrainFiles fa2ce5764381 | Enchantment of Music 640612 540 1st Song - 'Fantaisie Impromptu' by Frédéric Chopin {AFRTS}_OTRRPG.mp3 ::INFO:: 27.19MB
+!TrainFiles 0000000000c1 | Big Show.flac ::INFO:: 1.32GB

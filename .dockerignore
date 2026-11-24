@@ -1,0 +1,13 @@
+.git
+.gitignore
+.claude
+node_modules
+data
+test
+*.txt
+!public/**/*.txt
+*.md
+Dockerfile
+docker-compose.yml
+.env
+.env.*

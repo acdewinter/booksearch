@@ -1,0 +1,15 @@
+# The database and uploaded list (created at runtime)
+data/
+
+# List files stay out of the repository: they are large, and you load them
+# through the app's "Update list" button instead.
+/*.txt
+TrainFiles*.txt
+
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,18 @@
+# For running outside Coolify:  docker compose up -d --build
+# (Coolify builds from the Dockerfile directly; see DEPLOYMENT.md.)
+services:
+  shelfmark:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Leave empty for no sign-in, or set a password to protect the whole app.
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      APP_USERNAME: ${APP_USERNAME:-}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-512}
+    volumes:
+      - shelfmark-data:/data
+
+volumes:
+  shelfmark-data:

@@ -1,0 +1,16 @@
+{
+  "name": "shelfmark",
+  "version": "1.0.0",
+  "description": "Search an audiobook command list and copy the command for any file.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning --watch server/index.js",
+    "import": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/import-cli.js",
+    "test": "node --disable-warning=ExperimentalWarning --test"
+  }
+}

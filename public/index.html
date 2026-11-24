@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Shelfmark</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/ubuntu-sans-mono.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true">
+    <symbol id="i-folder" viewBox="0 0 20 20"><path d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.6l1.8 2H16a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 20 20"><rect x="7" y="7" width="9.5" height="9.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M13 4.5v-.5A1.5 1.5 0 0 0 11.5 2.5h-7A1.5 1.5 0 0 0 3 4v7a1.5 1.5 0 0 0 1.5 1.5H5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 20 20"><path d="m4.5 10.5 3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-close" viewBox="0 0 20 20"><path d="m5.5 5.5 9 9m0-9-9 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 20 20"><path d="M10 13V3.5m0 0L6.5 7M10 3.5 13.5 7M3.5 12.5v2A1.5 1.5 0 0 0 5 16h10a1.5 1.5 0 0 0 1.5-1.5v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </svg>
+
+  <a class="skip" href="#results">Skip to results</a>
+
+  <header class="top">
+    <div class="wrap top-row">
+      <a class="wordmark" href="/" id="home-link"><span class="wordmark-bang" aria-hidden="true">!</span>Shelfmark</a>
+      <button type="button" class="list-button" id="open-update" hidden>
+        <span id="list-summary"></span>
+        <span class="list-button-action"><svg class="icon"><use href="#i-upload"/></svg>Update list</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="searchbar" id="searchbar" hidden>
+    <div class="wrap">
+      <form class="search" id="search-form" role="search" autocomplete="off">
+        <label class="search-field" for="q">
+          <span class="search-bang" aria-hidden="true">!</span>
+          <span class="visually-hidden">Search the list</span>
+          <button type="button" class="scope-chip" id="scope-chip" hidden>
+            <span class="scope-chip-text" id="scope-chip-text"></span>
+            <svg class="icon"><use href="#i-close"/></svg>
+          </button>
+          <input id="q" name="q" type="search" inputmode="search" enterkeyhint="search" spellcheck="false"
+                 autocapitalize="off" autocorrect="off" placeholder="Search by author, title or show">
+          <kbd class="search-key" id="search-key" aria-hidden="true">/</kbd>
+          <button type="button" class="icon-button" id="clear-q" hidden aria-label="Clear search">
+            <svg class="icon"><use href="#i-close"/></svg>
+          </button>
+        </label>
+      </form>
+      <div class="controls">
+        <div class="segmented" role="group" aria-label="Which files to show">
+          <button type="button" id="show-main" aria-pressed="true" title="Audio files and zip archives">Books and audio</button>
+          <button type="button" id="show-all" aria-pressed="false" title="Also covers, logs, playlists and other extras">All files</button>
+        </div>
+        <p class="summary" id="summary" aria-live="polite"></p>
+      </div>
+    </div>
+  </div>
+
+  <main class="wrap main" id="results" tabindex="-1"></main>
+
+  <footer class="wrap foot" id="foot" hidden>
+    <p id="marks-note"></p>
+    <p class="foot-keys"><kbd>/</kbd> search <kbd>↓</kbd><kbd>↑</kbd> move <kbd>Enter</kbd> copy <kbd>Esc</kbd> clear</p>
+  </footer>
+
+  <div class="tray" id="tray" hidden>
+    <div class="wrap tray-row">
+      <svg class="icon tray-icon"><use href="#i-check"/></svg>
+      <p class="tray-text"><span id="tray-label">Copied</span> <code id="tray-command"></code></p>
+      <button type="button" class="icon-button" id="tray-close" aria-label="Hide this bar">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <dialog class="dialog" id="update-dialog" aria-labelledby="update-title">
+    <form method="dialog" class="dialog-head">
+      <h2 id="update-title">Update the list</h2>
+      <button class="icon-button" id="update-close" aria-label="Close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+    </form>
+    <div class="dialog-body" id="update-body"></div>
+  </dialog>
+
+  <dialog class="dialog" id="manual-copy" aria-labelledby="manual-title">
+    <form method="dialog" class="dialog-head">
+      <h2 id="manual-title">Copy it yourself</h2>
+      <button class="icon-button" aria-label="Close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+    </form>
+    <div class="dialog-body">
+      <p>This browser blocked the clipboard. The text is selected below: press <kbd>Ctrl</kbd>+<kbd>C</kbd> (<kbd>⌘</kbd>+<kbd>C</kbd> on a Mac).</p>
+      <textarea id="manual-text" class="manual-text" readonly rows="8" spellcheck="false"></textarea>
+    </div>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
