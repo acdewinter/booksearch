@@ -17,6 +17,7 @@
     <symbol id="i-copy" viewBox="0 0 20 20"><rect x="7" y="7" width="9.5" height="9.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M13 4.5v-.5A1.5 1.5 0 0 0 11.5 2.5h-7A1.5 1.5 0 0 0 3 4v7a1.5 1.5 0 0 0 1.5 1.5H5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
     <symbol id="i-check" viewBox="0 0 20 20"><path d="m4.5 10.5 3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-close" viewBox="0 0 20 20"><path d="m5.5 5.5 9 9m0-9-9 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-download" viewBox="0 0 20 20"><path d="M10 3.5V13m0 0-3.5-3.5M10 13l3.5-3.5M3.5 12.5v2A1.5 1.5 0 0 0 5 16h10a1.5 1.5 0 0 0 1.5-1.5v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-upload" viewBox="0 0 20 20"><path d="M10 13V3.5m0 0L6.5 7M10 3.5 13.5 7M3.5 12.5v2A1.5 1.5 0 0 0 5 16h10a1.5 1.5 0 0 0 1.5-1.5v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   </svg>
 
@@ -25,9 +26,17 @@
   <header class="top">
     <div class="wrap top-row">
       <a class="wordmark" href="/" id="home-link"><span class="wordmark-bang" aria-hidden="true">!</span>Shelfmark</a>
+      <nav class="views" aria-label="Sections">
+        <button type="button" id="nav-search" aria-current="page">Search</button>
+        <button type="button" id="nav-downloads">
+          <span class="dot is-off" id="nav-dot" hidden></span>
+          <span>Downloads</span>
+          <span class="views-count" id="nav-count" hidden></span>
+        </button>
+      </nav>
       <button type="button" class="list-button" id="open-update" hidden>
         <span id="list-summary"></span>
-        <span class="list-button-action"><svg class="icon"><use href="#i-upload"/></svg>Update list</span>
+        <span class="list-button-action"><svg class="icon"><use href="#i-upload"/></svg>Lists</span>
       </button>
     </div>
   </header>
@@ -52,7 +61,7 @@
       </form>
       <div class="controls">
         <div class="segmented" role="group" aria-label="Which files to show">
-          <button type="button" id="show-main" aria-pressed="true" title="Audio files and zip archives">Books and audio</button>
+          <button type="button" id="show-main" aria-pressed="true" title="Ebooks, audio files and archives">Books and audio</button>
           <button type="button" id="show-all" aria-pressed="false" title="Also covers, logs, playlists and other extras">All files</button>
         </div>
         <p class="summary" id="summary" aria-live="polite"></p>
@@ -64,13 +73,14 @@
 
   <footer class="wrap foot" id="foot" hidden>
     <p id="marks-note"></p>
-    <p class="foot-keys"><kbd>/</kbd> search <kbd>↓</kbd><kbd>↑</kbd> move <kbd>Enter</kbd> copy <kbd>Esc</kbd> clear</p>
+    <p class="foot-keys"><kbd>/</kbd> search <kbd>↓</kbd><kbd>↑</kbd> move <kbd>Enter</kbd> <span id="key-action">copy</span> <kbd>Esc</kbd> clear</p>
   </footer>
 
   <div class="tray" id="tray" hidden>
     <div class="wrap tray-row">
       <svg class="icon tray-icon"><use href="#i-check"/></svg>
       <p class="tray-text"><span id="tray-label">Copied</span> <code id="tray-command"></code></p>
+      <button type="button" class="tray-action" id="tray-action" hidden></button>
       <button type="button" class="icon-button" id="tray-close" aria-label="Hide this bar">
         <svg class="icon"><use href="#i-close"/></svg>
       </button>
@@ -81,12 +91,33 @@
 
   <dialog class="dialog" id="update-dialog" aria-labelledby="update-title">
     <form method="dialog" class="dialog-head">
-      <h2 id="update-title">Update the list</h2>
+      <h2 id="update-title">Lists</h2>
       <button class="icon-button" id="update-close" aria-label="Close">
         <svg class="icon"><use href="#i-close"/></svg>
       </button>
     </form>
     <div class="dialog-body" id="update-body"></div>
+  </dialog>
+
+  <dialog class="dialog" id="irc-dialog" aria-labelledby="irc-title">
+    <form method="dialog" class="dialog-head">
+      <h2 id="irc-title">IRC connection</h2>
+      <button class="icon-button" aria-label="Close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+    </form>
+    <div class="dialog-body" id="irc-body"></div>
+  </dialog>
+
+  <dialog class="dialog is-small" id="confirm-dialog" aria-labelledby="confirm-title">
+    <div class="dialog-body">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-text"></p>
+      <div class="form-actions">
+        <button type="button" class="button is-primary" id="confirm-yes"></button>
+        <form method="dialog"><button class="button is-quiet">Cancel</button></form>
+      </div>
+    </div>
   </dialog>
 
   <dialog class="dialog" id="manual-copy" aria-labelledby="manual-title">

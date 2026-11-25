@@ -18,9 +18,9 @@ test.after(() => library.close());
 const names = (files) => files.map((f) => f.c.slice(f.p));
 
 test('build counts files and folders', () => {
-  assert.equal(stats.files, 12);
-  assert.equal(stats.mainFiles, 11);
-  assert.equal(stats.folders, 5);
+  assert.equal(stats.files, 15);
+  assert.equal(stats.mainFiles, 13);
+  assert.equal(stats.folders, 6);
   assert.equal(stats.skippedLines, 0);
   assert.equal(library.info.sourceName, 'sample-list.txt');
 });
@@ -51,6 +51,16 @@ test('extras are hidden unless asked for', () => {
   assert.equal(library.search({ q: 'stopped heart', all: true }).total.files, 3);
 });
 
+test('ebooks are found without switching to all files', () => {
+  const r = library.search({ q: 'pratchett mort' });
+  assert.equal(r.total.files, 2);
+  assert.deepEqual(names(r.groups[0].files), ['Pratchett, Terry - Discworld 04 - Mort.epub', 'Pratchett, Terry - Discworld 04 - Mort.mobi']);
+  assert.equal(library.search({ q: 'pratchett mort', all: true }).total.files, 3, 'the cover only shows under all files');
+  const folder = library.browse({ path: '/books/P/Pratchett, Terry' });
+  assert.equal(folder.files.total, 2);
+  assert.equal(folder.folder.otherFiles, 1);
+});
+
 test('search can be limited to a folder, and exclusions work', () => {
   assert.equal(library.search({ q: 'heaven' }).total.files, 2);
   assert.equal(library.search({ q: 'heaven', path: '/shows' }).total.files, 0);
@@ -66,10 +76,10 @@ test('odd input never throws', () => {
 
 test('browse lists sub-folders and skips single-folder chains', () => {
   const root = library.browse({});
-  assert.deepEqual(root.children.map((c) => c.name), ['audio1 / Audio Books', 'shows / radio-etc']);
-  assert.equal(root.folder.files, 11);
-  assert.equal(root.folder.otherFiles, 1);
-  assert.deepEqual(root.sections.map((s) => s.name), ['audio1 / Audio Books', 'shows / radio-etc']);
+  assert.deepEqual(root.children.map((c) => c.name), ['audio1 / Audio Books', 'books / P / Pratchett, Terry', 'shows / radio-etc']);
+  assert.equal(root.folder.files, 13);
+  assert.equal(root.folder.otherFiles, 2);
+  assert.deepEqual(root.sections.map((s) => s.name), ['audio1 / Audio Books', 'books / P / Pratchett, Terry', 'shows / radio-etc']);
 
   const author = library.browse({ path: '/audio1/Audio Books/A/Aaron, Rachel' });
   assert.equal(author.files.total, 3);

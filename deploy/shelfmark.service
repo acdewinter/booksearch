@@ -1,0 +1,21 @@
+[Unit]
+Description=Shelfmark (audiobook list search and IRC downloads)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=shelfmark
+Group=shelfmark
+EnvironmentFile=/etc/shelfmark.env
+WorkingDirectory=/opt/shelfmark
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server/index.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+NoNewPrivileges=true
+# Downloaded files are readable and writable by the group too, which helps
+# when other containers or a network share use the same folder.
+UMask=0002
+
+[Install]
+WantedBy=multi-user.target

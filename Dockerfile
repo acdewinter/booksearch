@@ -3,15 +3,18 @@ FROM node:24-alpine
 
 ENV NODE_ENV=production \
     PORT=3000 \
-    DATA_DIR=/data
+    DATA_DIR=/data \
+    DOWNLOAD_DIR=/downloads
 
 WORKDIR /app
 COPY package.json ./
 COPY server ./server
 COPY public ./public
 
-# The database and the uploaded list live in /data. Mount a volume there.
-RUN mkdir -p /data && chown node:node /data
+# The database, the uploaded list and the IRC settings live in /data. Mount a
+# volume there. Files received over IRC go to /downloads: mount the folder you
+# want them in at that path, or they are lost when the container is replaced.
+RUN mkdir -p /data /downloads && chown node:node /data /downloads
 VOLUME /data
 
 USER node

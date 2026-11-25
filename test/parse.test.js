@@ -6,11 +6,14 @@ import test from 'node:test';
 import {
   KIND_ARCHIVE,
   KIND_AUDIO,
+  KIND_EBOOK,
   KIND_OTHER,
+  kindOf,
   normalizeFolderPath,
   parseCommandLine,
   parseSize,
   readLines,
+  readList,
 } from '../server/parse.js';
 
 test('command is everything before ::INFO:: and ends with the extension', () => {
@@ -40,6 +43,74 @@ test('lines without a size are still commands', () => {
   assert.equal(f.sizeBytes, 0);
   const g = parseCommandLine('!TrainFiles abc123 | notes.txt ::INFO::');
   assert.equal(g.command, '!TrainFiles abc123 | notes.txt');
+});
+
+test('ebooks are main files; covers and notes are extras', () => {
+  const f = parseCommandLine('!Bookworm 1a2b3c | Pratchett, Terry - Mort.EPUB ::INFO:: 412.10KB');
+  assert.equal(f.ext, 'epub');
+  assert.equal(f.kind, KIND_EBOOK);
+  for (const ext of ['epub', 'mobi', 'azw3', 'pdf', 'djvu', 'fb2', 'lit', 'cbz', 'cbr', 'docx', 'rtf']) {
+    assert.equal(kindOf(ext), KIND_EBOOK, ext);
+  }
+  for (const ext of ['jpg', 'txt', 'nfo', 'html', 'opf', 'exe', '']) assert.equal(kindOf(ext), KIND_OTHER, ext);
+  assert.equal(kindOf('mp3'), KIND_AUDIO);
+  assert.equal(kindOf('rar'), KIND_ARCHIVE);
+  assert.ok(KIND_AUDIO < KIND_OTHER && KIND_ARCHIVE < KIND_OTHER && KIND_EBOOK < KIND_OTHER);
+});
+
+test('commands without an id or a bar keep their whole file name', () => {
+  const f = parseCommandLine('!Bsk Terry Pratchett - [Discworld 04] - Mort (UK) (retail).epub ::INFO:: 918.2KB');
+  assert.equal(f.name, 'Terry Pratchett - [Discworld 04] - Mort (UK) (retail).epub');
+  assert.equal(f.command.slice(f.namePos), f.name);
+  assert.equal(f.kind, KIND_EBOOK);
+  assert.equal(parseCommandLine('!Bsk 13 Pitch Black Cats - Sister\'s War.epub').name, '13 Pitch Black Cats - Sister\'s War.epub');
+  // An id after the bot's name is still left out of the file name.
+  assert.equal(parseCommandLine('!Bot 1a2b3c4d5e6f Some Book.mp3').name, 'Some Book.mp3');
+  assert.equal(parseCommandLine('!Bot #1234 Some Book.mp3').name, 'Some Book.mp3');
+});
+
+test('folder headings in both layouts are recognised', () => {
+  assert.equal(normalizeFolderPath('+1New\\2024\\2024-12-16'), '/+1New/2024/2024-12-16');
+  assert.equal(normalizeFolderPath('D:\\Books\\New '), '/D:/Books/New');
+  assert.equal(normalizeFolderPath('/a/b\\c'), '/a/b\\c');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shelfmark-list-'));
+  const file = path.join(dir, 'list.txt');
+  fs.writeFileSync(file, [
+    'OmenServe v2.73',
+    'To request a file, copy/paste to the channel... !Bsk FILENAME',
+    '',
+    '===============',
+    '+1New\\2024\\2024',
+    '===============',
+    '!Bsk A A Abbott - Run For Your Lies.epub ::INFO:: 852.53KB',
+    '',
+    '=====',
+    'eBooks',
+    '=====',
+    '!Bsk Another Book.mobi ::INFO:: 1.3MB',
+    '/unix/style',
+    '====',
+    '!Bot 123 | third.mp3',
+    'a stray note',
+  ].join('\r\n'));
+  const seen = [];
+  readList(file, {
+    folder: (p) => seen.push(['folder', p]),
+    command: (line) => seen.push(['command', line.slice(0, 12)]),
+    other: (line) => seen.push(['other', line.slice(0, 12)]),
+  });
+  assert.deepEqual(seen, [
+    ['other', 'OmenServe v2'],
+    ['other', 'To request a'],
+    ['folder', '/+1New/2024/2024'],
+    ['command', '!Bsk A A Abb'],
+    ['folder', '/eBooks'],
+    ['command', '!Bsk Another'],
+    ['folder', '/unix/style'],
+    ['command', '!Bot 123 | t'],
+    ['other', 'a stray note'],
+  ]);
 });
 
 test('non-command lines are rejected', () => {

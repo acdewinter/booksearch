@@ -4,6 +4,9 @@
 node_modules
 data
 test
+dev
+deploy
+downloads
 *.txt
 !public/**/*.txt
 *.md

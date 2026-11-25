@@ -5,11 +5,22 @@ import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import zlib from 'node:zlib';
 import { config } from './config.js';
+import { IrcManager } from './irc/manager.js';
+import { createIrcRoutes } from './irc/routes.js';
 import { Library } from './library.js';
+import { ListError, ListStore } from './lists.js';
 
 const library = new Library(config.dbPath);
+const store = new ListStore(config.dataDir);
+const irc = new IrcManager({
+  dataDir: config.dataDir,
+  downloadDir: config.downloadDir,
+  dccPorts: config.dccPorts,
+  dccPublicIp: config.dccPublicIp,
+  version: config.version,
+});
 
-// State of the most recent list upload/import.
+// State of the most recent change to the lists.
 const importState = {
   running: false,
   phase: '',
@@ -20,14 +31,18 @@ const importState = {
 
 // ---------------------------------------------------------------- importing
 
-function startImport(sourcePath, sourceName, { keepSource }) {
+/**
+ * Build the database for a planned set of lists (see ListStore.plan) in a
+ * worker, then swap it in. Until that succeeds nothing changes.
+ */
+function startBuild(plan) {
   importState.running = true;
   importState.phase = 'Reading folders';
   importState.progress = 0;
   importState.error = null;
 
   const worker = new Worker(new URL('./import-worker.js', import.meta.url), {
-    workerData: { sourcePath, outPath: config.buildPath, sourceName },
+    workerData: { sources: plan.sources, outPath: config.buildPath, key: plan.key },
   });
   let settled = false;
   const finish = (error) => {
@@ -37,9 +52,9 @@ function startImport(sourcePath, sourceName, { keepSource }) {
     importState.finishedAt = new Date().toISOString();
     importState.error = error;
     if (error) {
-      console.error(`Import failed: ${error}`);
+      console.error(`Loading the lists failed: ${error}`);
       fs.rmSync(config.buildPath, { force: true });
-      if (keepSource) fs.rmSync(sourcePath, { force: true });
+      plan.discard();
     }
   };
 
@@ -52,13 +67,9 @@ function startImport(sourcePath, sourceName, { keepSource }) {
     } else if (msg.type === 'done') {
       try {
         library.swap(config.buildPath);
-        // The uploaded file replaces the stored copy of the list.
-        if (keepSource) {
-          fs.renameSync(sourcePath, config.sourcePath);
-          fs.writeFileSync(config.sourceNamePath, sourceName);
-        }
+        plan.commit(msg.stats.lists);
         console.log(
-          `Loaded "${sourceName}": ${msg.stats.files.toLocaleString('en')} files in ${msg.stats.folders.toLocaleString('en')} folders.`,
+          `Loaded ${msg.stats.files.toLocaleString('en')} files in ${msg.stats.folders.toLocaleString('en')} folders from ${msg.stats.lists.map((l) => `"${l.name}"`).join(', ')}.`,
         );
         finish(null);
       } catch (err) {
@@ -69,27 +80,47 @@ function startImport(sourcePath, sourceName, { keepSource }) {
   });
   worker.on('error', (err) => finish(err.message));
   worker.on('exit', (code) => {
-    if (code !== 0) finish(`The import stopped unexpectedly (exit code ${code}).`);
+    if (code !== 0) finish(`Loading stopped unexpectedly (exit code ${code}).`);
   });
+}
+
+/** Add, replace or remove lists. Throws ListError when the request makes no sense. */
+function applyListChanges(changes) {
+  const plan = store.plan(changes);
+  if (plan.sources.length > 0) {
+    startBuild(plan);
+    return;
+  }
+  // The last list was removed: there is nothing left to search.
+  library.close();
+  for (const suffix of ['', '-journal', '-wal', '-shm']) fs.rmSync(config.dbPath + suffix, { force: true });
+  plan.commit();
+  importState.error = null;
+  importState.finishedAt = new Date().toISOString();
+  console.log('All lists were removed.');
 }
 
 function boot() {
   fs.mkdirSync(config.dataDir, { recursive: true });
   for (const stale of [config.uploadPath, config.buildPath]) fs.rmSync(stale, { force: true });
+  store.load();
 
-  if (library.open()) {
-    console.log(`List loaded: ${library.info.files.toLocaleString('en')} files from "${library.info.sourceName}".`);
-  } else if (fs.existsSync(config.sourcePath)) {
-    console.log('Rebuilding the database from the stored list file…');
-    let name = 'source.txt';
-    try {
-      name = fs.readFileSync(config.sourceNamePath, 'utf8').trim() || name;
-    } catch {
-      // no stored name
-    }
-    startImport(config.sourcePath, name, { keepSource: false });
+  const opened = library.open();
+  if (store.lists.length === 0) {
+    console.log(opened
+      ? `List loaded: ${library.info.files.toLocaleString('en')} files from "${library.info.sourceName}".`
+      : 'No list loaded yet. Open the app and upload your list file.');
+  } else if (opened && library.info.listsKey === store.key()) {
+    console.log(`${store.lists.length === 1 ? 'List' : `${store.lists.length} lists`} loaded: ${library.info.files.toLocaleString('en')} files.`);
   } else {
-    console.log('No list loaded yet. Open the app and upload your list file.');
+    // A new app version, or lists changed while the app was off: build from the stored files.
+    console.log('Rebuilding the database from the stored list files…');
+    startBuild({
+      sources: store.sources(),
+      key: store.key(),
+      commit: (stats) => store.setStats(stats),
+      discard: () => {},
+    });
   }
 }
 
@@ -195,6 +226,21 @@ function serveStatic(req, res, urlPath) {
   return true;
 }
 
+/** Requests that change something must come from this app's own page, not from another site. */
+function sameOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true; // not a browser, or a same-origin request from an older one
+  let originHost = '';
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return false;
+  }
+  return originHost === (req.headers['x-forwarded-host'] || req.headers.host);
+}
+
+const ircRoutes = createIrcRoutes(irc, { sendJson, sendError, sameOrigin });
+
 function safeEqual(a, b) {
   const x = crypto.createHash('sha256').update(a).digest();
   const y = crypto.createHash('sha256').update(b).digest();
@@ -218,6 +264,7 @@ function statusPayload() {
   return {
     state: library.ready ? 'ready' : 'empty',
     library: library.info,
+    lists: store.lists,
     import: { ...importState },
     maxUploadBytes: config.maxUploadBytes,
   };
@@ -225,25 +272,11 @@ function statusPayload() {
 
 // ------------------------------------------------------------------- upload
 
+/** Receive one list file. It waits in a holding area until /api/lists/apply says what it is. */
 function handleUpload(req, res) {
-  if (importState.running) {
+  if (!sameOrigin(req)) {
     req.resume();
-    return sendError(req, res, 409, 'A list is already being loaded. Wait for it to finish.');
-  }
-  // Uploads must come from this app's own page, not from another site.
-  const origin = req.headers.origin;
-  if (origin) {
-    let originHost = '';
-    try {
-      originHost = new URL(origin).host;
-    } catch {
-      // leave empty
-    }
-    const host = req.headers['x-forwarded-host'] || req.headers.host;
-    if (originHost !== host) {
-      req.resume();
-      return sendError(req, res, 403, 'Uploads are only accepted from this app.');
-    }
+    return sendError(req, res, 403, 'Uploads are only accepted from this app.');
   }
   if (!/^application\/octet-stream/i.test(req.headers['content-type'] || '')) {
     req.resume();
@@ -256,32 +289,25 @@ function handleUpload(req, res) {
     return sendError(req, res, 413, `This file is larger than the ${limitMb} MB limit.`);
   }
 
-  let sourceName = 'list.txt';
+  let fileName = 'list.txt';
   try {
     const raw = decodeURIComponent(String(req.headers['x-filename'] || ''));
     const base = raw.split(/[\\/]/).pop().replace(/[\u0000-\u001f]/g, '').trim();
-    if (base) sourceName = base.slice(0, 200);
+    if (base) fileName = base.slice(0, 200);
   } catch {
     // keep the default name
   }
 
-  importState.running = true;
-  importState.phase = 'Uploading';
-  importState.progress = 0;
-  importState.error = null;
-
-  const out = fs.createWriteStream(config.uploadPath);
+  const staged = store.stage();
+  const out = fs.createWriteStream(staged.path);
   let received = 0;
   let failed = false;
   const fail = (status, message) => {
     if (failed) return;
     failed = true;
-    importState.running = false;
-    importState.error = message;
-    importState.finishedAt = new Date().toISOString();
     req.unpipe(out);
     out.destroy();
-    fs.rm(config.uploadPath, { force: true }, () => {});
+    fs.rm(staged.path, { force: true }, () => {});
     if (!res.headersSent) {
       res.setHeader('Connection', 'close');
       sendError(req, res, status, message);
@@ -300,11 +326,47 @@ function handleUpload(req, res) {
   out.on('error', (err) => fail(500, `Could not save the upload: ${err.message}`));
   out.on('finish', () => {
     if (failed) return;
-    if (received === 0) return fail(400, 'The uploaded file is empty.');
-    startImport(config.uploadPath, sourceName, { keepSource: true });
-    sendJson(req, res, 202, { started: true });
+    if (received === 0) return fail(400, `"${fileName}" is empty.`);
+    sendJson(req, res, 200, { token: staged.token, fileName, bytes: received });
   });
   req.pipe(out);
+}
+
+/** Say what the uploaded files are (new lists, or newer copies), and which lists to drop. */
+function handleApply(req, res) {
+  if (!sameOrigin(req) || !/^application\/json/i.test(req.headers['content-type'] || '')) {
+    req.resume();
+    return sendError(req, res, 403, 'This is only accepted from the app itself.');
+  }
+  const chunks = [];
+  let size = 0;
+  req.on('data', (chunk) => {
+    size += chunk.length;
+    if (size > 256 * 1024) req.destroy();
+    else chunks.push(chunk);
+  });
+  req.on('error', () => {});
+  req.on('end', () => {
+    let changes;
+    try {
+      changes = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    } catch {
+      return sendError(req, res, 400, 'The request could not be read.');
+    }
+    if (importState.running) {
+      store.discard([...(changes?.add || []), ...(changes?.replace || [])].map((c) => c?.token));
+      return sendError(req, res, 409, 'Lists are already being loaded. Wait for that to finish.');
+    }
+    try {
+      applyListChanges(changes);
+      return sendJson(req, res, 202, { started: true });
+    } catch (err) {
+      if (err instanceof ListError) return sendError(req, res, 400, err.message);
+      console.error(err);
+      return sendError(req, res, 500, 'Something went wrong on the server.');
+    }
+  });
+  return undefined;
 }
 
 // ------------------------------------------------------------------ routing
@@ -316,9 +378,13 @@ function handleApi(req, res, url) {
   if (p === '/api/status' && req.method === 'GET') {
     return sendJson(req, res, 200, statusPayload());
   }
-  if (p === '/api/import' && req.method === 'POST') {
+  if (p === '/api/lists/upload' && req.method === 'POST') {
     return handleUpload(req, res);
   }
+  if (p === '/api/lists/apply' && req.method === 'POST') {
+    return handleApply(req, res);
+  }
+  if (ircRoutes.handle(req, res, url)) return undefined;
   if (req.method !== 'GET') return sendError(req, res, 405, 'Method not allowed.');
 
   if (p === '/api/search' || p === '/api/browse' || p === '/api/files') {
@@ -340,7 +406,7 @@ function handleApi(req, res, url) {
         limit: int('limit') || undefined,
       });
     }
-    if (result.notFound) return sendError(req, res, 404, 'That folder is not in the current list.');
+    if (result.notFound) return sendError(req, res, 404, 'That folder is not in the loaded lists.');
     return sendJson(req, res, 200, result);
   }
   return sendError(req, res, 404, 'Not found.');
@@ -391,12 +457,18 @@ const server = http.createServer((req, res) => {
 server.requestTimeout = 30 * 60 * 1000;
 
 boot();
+irc.start();
 server.listen(config.port, config.host, () => {
   console.log(`Shelfmark is running on http://localhost:${config.port}`);
-  if (!config.password) console.log('No APP_PASSWORD set: anyone who can reach this address can use the app.');
+  console.log(`Downloads are saved to ${config.downloadDir}`);
+  if (!config.password) {
+    console.log('No APP_PASSWORD set: anyone who can reach this address can use the app, including the IRC connection.');
+  }
 });
 
 function shutdown() {
+  irc.shutdown();
+  ircRoutes.close();
   server.close(() => {
     library.close();
     process.exit(0);

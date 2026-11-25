@@ -1,12 +1,18 @@
-// Parsing for the list file format:
+// Parsing for the list file formats. Two layouts are in use:
 //
 //   /audio1/Audio Books/A/Aaron, Rachel
 //   ================================================================================
 //   !TrainFiles f77467ded33c | Aaron, Rachel - By a Silver Thread (audiobook).zip ::INFO:: 306.00MB
 //
-// A line starting with "/" names the folder for the command lines that follow.
+//   ===============
+//   +1New\2024\2024
+//   ===============
+//   !Bsk Woods, Stuart - Stone Barrington 56 - Hush-Hush.epub ::INFO:: 716.79KB
+//
 // A line starting with "!" is a command. The command is everything before
-// " ::INFO::" and ends with the file extension.
+// " ::INFO::" and ends with the file extension. A line starting with "/", or
+// any other line with a row of "=" right under it, names the folder for the
+// commands that follow.
 
 import fs from 'node:fs';
 
@@ -15,10 +21,19 @@ const AUDIO = new Set([
   'aif', 'aiff', 'ape', 'mka', 'mp2', 'ra', 'aa', 'aax', 'awb', 'amr', 'mpc',
 ]);
 const ARCHIVE = new Set(['zip', 'rar', '7z', 'gz', 'tar', 'tgz', 'bz2', 'xz']);
+// Books to read: ebook formats, comics, and the document formats books are passed around in.
+const EBOOK = new Set([
+  'epub', 'kepub', 'mobi', 'azw', 'azw3', 'azw4', 'kfx', 'prc', 'pdb', 'fb2', 'fbz', 'lit', 'lrf', 'lrx',
+  'imp', 'tcr', 'ibooks', 'htmlz', 'pdf', 'djvu', 'djv', 'chm',
+  'cbz', 'cbr', 'cb7', 'cbt',
+  'doc', 'docx', 'rtf', 'odt',
+]);
 
+// Everything below KIND_OTHER is shown by default; "other" only under "All files".
 export const KIND_AUDIO = 0;
 export const KIND_ARCHIVE = 1;
-export const KIND_OTHER = 2;
+export const KIND_EBOOK = 2;
+export const KIND_OTHER = 3;
 
 const UNITS = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3, TB: 1024 ** 4 };
 
@@ -33,13 +48,32 @@ export function parseSize(label) {
 export function kindOf(ext) {
   if (AUDIO.has(ext)) return KIND_AUDIO;
   if (ARCHIVE.has(ext)) return KIND_ARCHIVE;
+  if (EBOOK.has(ext)) return KIND_EBOOK;
   return KIND_OTHER;
 }
 
-/** "/a/b/" -> "/a/b"; collapses repeated slashes; keeps everything else as written. */
+/**
+ * "/a/b/" -> "/a/b"; collapses repeated slashes; keeps everything else as written.
+ * Headings written the Windows way ("a\b\c") become "/a/b/c".
+ */
 export function normalizeFolderPath(line) {
-  const parts = line.trim().split('/').filter(Boolean);
+  const text = line.trim();
+  const parts = text.split(text.startsWith('/') ? '/' : /[\\/]/).map((s) => s.trim()).filter(Boolean);
   return `/${parts.join('/')}`;
+}
+
+/** Some lists put an id between the bot's name and the file name, without a "|". */
+const ID_TOKEN = /^(?:[0-9a-f]{8,}|#\d+)$/i;
+
+/**
+ * Where the file name starts in a command that has no " | ":
+ * "!Bsk Some Book.epub" -> after "!Bsk "; "!Bot 1a2b3c4d5e Some Book.epub" -> after the id.
+ */
+export function namePosWithoutBar(command) {
+  const m = /^!\S+\s+/.exec(command);
+  if (!m) return 0;
+  const id = /^(\S+)\s+/.exec(command.slice(m[0].length));
+  return id && ID_TOKEN.test(id[1]) ? m[0].length + id[0].length : m[0].length;
 }
 
 /**
@@ -65,8 +99,7 @@ export function parseCommandLine(line) {
   if (bar >= 0) {
     namePos = bar + 3;
   } else {
-    const m = /^!\S+\s+\S+\s+/.exec(command);
-    namePos = m ? m[0].length : 0;
+    namePos = namePosWithoutBar(command);
   }
   const name = command.slice(namePos);
 
@@ -139,4 +172,31 @@ export function readLines(filePath, onLine) {
 
 export function isSeparatorLine(line) {
   return line.charCodeAt(0) === 61 /* = */ && /^=+\s*$/.test(line);
+}
+
+/**
+ * Walk a list file and report what each line is.
+ *   folder(path, bytesRead)   a folder heading, already tidied
+ *   command(line, bytesRead)  a line starting with "!"
+ *   other(line)               anything else that is not layout (a title, a note)
+ */
+export function readList(filePath, { folder, command, other = () => {} }) {
+  // A plain line is only a folder heading if a row of "=" follows it, so it waits one line.
+  let pending = null;
+  readLines(filePath, (line, bytes) => {
+    if (pending !== null) {
+      const heading = pending;
+      pending = null;
+      if (isSeparatorLine(line)) {
+        folder(normalizeFolderPath(heading), bytes);
+        return;
+      }
+      other(heading);
+    }
+    const c = line.charCodeAt(0);
+    if (c === 33 /* ! */) command(line, bytes);
+    else if (c === 47 /* / */) folder(normalizeFolderPath(line), bytes);
+    else if (line.trim() !== '' && !isSeparatorLine(line)) pending = line;
+  });
+  if (pending !== null) other(pending);
 }

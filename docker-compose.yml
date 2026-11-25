@@ -11,8 +11,14 @@ services:
       APP_PASSWORD: ${APP_PASSWORD:-}
       APP_USERNAME: ${APP_USERNAME:-}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-512}
+      # Only for senders behind a firewall; also publish the same ports below.
+      DCC_PORTS: ${DCC_PORTS:-}
+      DCC_PUBLIC_IP: ${DCC_PUBLIC_IP:-}
     volumes:
       - shelfmark-data:/data
+      # Where downloaded files end up. Point the left side at your own folder;
+      # it must be writable by user id 1000.
+      - ${DOWNLOAD_PATH:-./downloads}:/downloads
 
 volumes:
   shelfmark-data:

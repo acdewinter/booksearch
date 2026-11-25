@@ -8,15 +8,16 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   KIND_OTHER,
-  isSeparatorLine,
-  normalizeFolderPath,
   parseCommandLine,
-  readLines,
+  readList,
 } from './parse.js';
 
 // Bump when the tables below change. A database with a different version is
 // rebuilt from the stored list file on startup.
-export const SCHEMA_VERSION = 1;
+// 2: ebooks became a kind of their own, and lists in the "!Bot File.ext" layout
+//    (with their folder headings) are read properly.
+// 3: several lists can be combined; the database records which ones it holds.
+export const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
   CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
@@ -45,7 +46,7 @@ const SCHEMA = `
     command    TEXT NOT NULL,     -- exactly what gets copied
     name_pos   INTEGER NOT NULL,  -- where the file name starts inside command
     ext        TEXT NOT NULL,
-    kind       INTEGER NOT NULL,  -- 0 audio, 1 archive, 2 other
+    kind       INTEGER NOT NULL,  -- 0 audio, 1 archive, 2 ebook, 3 other
     size_bytes INTEGER NOT NULL,
     size_label TEXT NOT NULL
   );
@@ -70,15 +71,53 @@ function compareSegments(a, b) {
   return a.segs.length - b.segs.length;
 }
 
+/** A list's name as a folder name: it becomes the top folder when several lists are loaded. */
+export function listFolderName(name) {
+  return String(name ?? '').replace(/[\\/]+/g, '-').replace(/\s+/g, ' ').trim() || 'List';
+}
+
 /**
- * @param {string} sourcePath  list file to read
+ * @typedef {{path: string, name?: string, id?: string, fileName?: string}} ListSource
+ *
+ * @param {string | ListSource[]} sources one list file, or several to combine. With
+ *        several, each list gets a top folder of its own, named after the list.
  * @param {string} outPath     database file to create (replaced if present)
- * @param {{sourceName?: string, onProgress?: (p: {phase: string, progress: number}) => void}} [options]
- * @returns {{files: number, mainFiles: number, folders: number, bytes: number, skippedLines: number}}
+ * @param {{sourceName?: string, key?: string, onProgress?: (p: {phase: string, progress: number}) => void}} [options]
+ * @returns {{files: number, mainFiles: number, folders: number, bytes: number, skippedLines: number, lists: object[]}}
  */
-export function buildDatabase(sourcePath, outPath, options = {}) {
-  const { sourceName = path.basename(sourcePath), onProgress = () => {} } = options;
-  const sourceSize = Math.max(1, fs.statSync(sourcePath).size);
+export function buildDatabase(sources, outPath, options = {}) {
+  const { onProgress = () => {} } = options;
+  const lists = (typeof sources === 'string' ? [{ path: sources, name: options.sourceName }] : sources).map((s) => {
+    const fileName = s.fileName || path.basename(s.path);
+    return {
+      id: s.id || '',
+      path: s.path,
+      fileName,
+      name: s.name || fileName,
+      size: Math.max(1, fs.statSync(s.path).size),
+      prefix: '',
+      commandLines: 0,
+      files: 0,
+      mainFiles: 0,
+      folders: 0,
+      bytes: 0,
+      skippedLines: 0,
+    };
+  });
+  if (lists.length === 0) throw new Error('There is no list to load.');
+
+  // Several lists: each one sits under a top folder with its own name.
+  if (lists.length > 1) {
+    const taken = new Set();
+    for (const list of lists) {
+      const base = listFolderName(list.name);
+      let folder = base;
+      for (let i = 2; taken.has(folder.toLowerCase()); i += 1) folder = `${base} (${i})`;
+      taken.add(folder.toLowerCase());
+      list.prefix = `/${folder}`;
+    }
+  }
+  const totalSize = lists.reduce((sum, l) => sum + l.size, 0);
 
   let lastReport = 0;
   const report = (phase, fraction) => {
@@ -90,26 +129,38 @@ export function buildDatabase(sourcePath, outPath, options = {}) {
 
   // Pass 1: find every folder (and its parents) so ids can follow tree order.
   const seen = new Set(['/']);
-  let commandLines = 0;
-  readLines(sourcePath, (line, bytes) => {
-    const c = line.charCodeAt(0);
-    if (c === 47 /* / */) {
-      let p = normalizeFolderPath(line);
-      while (p !== '/' && !seen.has(p)) {
-        seen.add(p);
-        const cut = p.lastIndexOf('/');
-        p = cut <= 0 ? '/' : p.slice(0, cut);
-      }
-    } else if (c === 33 /* ! */) {
-      commandLines += 1;
+  const addFolder = (folderPath) => {
+    let p = folderPath;
+    while (p !== '/' && !seen.has(p)) {
+      seen.add(p);
+      const cut = p.lastIndexOf('/');
+      p = cut <= 0 ? '/' : p.slice(0, cut);
     }
-    report('Reading folders', (bytes / sourceSize) * 0.1);
-  });
+  };
+  const within = (list, folderPath) => (folderPath === '/' ? list.prefix || '/' : list.prefix + folderPath);
 
-  if (commandLines === 0) {
-    throw new Error(
-      'No command lines found. Each command should be on its own line and start with "!".',
-    );
+  let doneSize = 0;
+  for (const list of lists) {
+    if (list.prefix) addFolder(list.prefix);
+    const base = doneSize;
+    readList(list.path, {
+      folder(folderPath, bytes) {
+        addFolder(within(list, folderPath));
+        report('Reading folders', ((base + bytes) / totalSize) * 0.1);
+      },
+      command(line, bytes) {
+        list.commandLines += 1;
+        if ((list.commandLines & 1023) === 0) report('Reading folders', ((base + bytes) / totalSize) * 0.1);
+      },
+    });
+    if (list.commandLines === 0) {
+      throw new Error(
+        lists.length > 1 || typeof sources !== 'string'
+          ? `No command lines found in "${list.fileName}". Each command should be on its own line and start with "!".`
+          : 'No command lines found. Each command should be on its own line and start with "!".',
+      );
+    }
+    doneSize += list.size;
   }
 
   const folders = [...seen].map((p) => {
@@ -143,7 +194,6 @@ export function buildDatabase(sourcePath, outPath, options = {}) {
   }
   const db = new DatabaseSync(outPath);
   let files = 0;
-  let skippedLines = 0;
   try {
     db.exec('PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; PRAGMA locking_mode = EXCLUSIVE;');
     db.exec('PRAGMA cache_size = -65536; PRAGMA temp_store = MEMORY;');
@@ -155,32 +205,41 @@ export function buildDatabase(sourcePath, outPath, options = {}) {
     );
     const insertFileFts = db.prepare('INSERT INTO files_fts (rowid, name, path) VALUES (?, ?, ?)');
 
-    let current = folders[0]; // commands before any folder line land in "/"
-    readLines(sourcePath, (line, bytes) => {
-      if (line.length === 0) return;
-      const c = line.charCodeAt(0);
-      if (c === 47) {
-        current = folders[idByPath.get(normalizeFolderPath(line)) - 1];
-      } else if (c === 33) {
-        const f = parseCommandLine(line);
-        if (!f) {
-          skippedLines += 1;
-          return;
-        }
-        files += 1;
-        insertFile.run(files, current.id, f.command, f.namePos, f.ext, f.kind, f.sizeBytes, f.sizeLabel);
-        insertFileFts.run(files, f.name, current.path);
-        current.directFiles += 1;
-        if (f.kind !== KIND_OTHER) current.directMain += 1;
-        current.directBytes += f.sizeBytes;
-      } else if (!isSeparatorLine(line) && line.trim() !== '') {
-        skippedLines += 1;
-      }
-      if ((files & 1023) === 0) report('Indexing files', 0.1 + (bytes / sourceSize) * 0.75);
-    });
-
-    if (files === 0) {
-      throw new Error('No commands could be read from this file.');
+    doneSize = 0;
+    for (const list of lists) {
+      const base = doneSize;
+      // Commands before any folder line land in the list's own top folder.
+      let current = folders[idByPath.get(list.prefix || '/') - 1];
+      readList(list.path, {
+        folder(folderPath) {
+          current = folders[idByPath.get(within(list, folderPath)) - 1];
+        },
+        command(line, bytes) {
+          const f = parseCommandLine(line);
+          if (!f) {
+            list.skippedLines += 1;
+            return;
+          }
+          files += 1;
+          insertFile.run(files, current.id, f.command, f.namePos, f.ext, f.kind, f.sizeBytes, f.sizeLabel);
+          insertFileFts.run(files, f.name, current.path);
+          if (current.directFiles === 0) list.folders += 1;
+          current.directFiles += 1;
+          list.files += 1;
+          list.bytes += f.sizeBytes;
+          if (f.kind !== KIND_OTHER) {
+            current.directMain += 1;
+            list.mainFiles += 1;
+          }
+          current.directBytes += f.sizeBytes;
+          if ((files & 1023) === 0) report('Indexing files', 0.1 + ((base + bytes) / totalSize) * 0.75);
+        },
+        other() {
+          list.skippedLines += 1;
+        },
+      });
+      if (list.files === 0) throw new Error(`No commands could be read from "${list.fileName}".`);
+      doneSize += list.size;
     }
 
     report('Finishing', 0.87);
@@ -222,12 +281,24 @@ export function buildDatabase(sourcePath, outPath, options = {}) {
       mainFiles: root.totalMain,
       folders: folders.filter((f) => f.directFiles > 0).length,
       bytes: root.totalBytes,
-      skippedLines,
+      skippedLines: lists.reduce((sum, l) => sum + l.skippedLines, 0),
+      lists: lists.map((l) => ({
+        id: l.id,
+        name: l.name,
+        fileName: l.fileName,
+        folder: l.prefix,
+        files: l.files,
+        mainFiles: l.mainFiles,
+        folders: l.folders,
+        bytes: l.bytes,
+        skippedLines: l.skippedLines,
+      })),
     };
     const setMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
     setMeta.run('schema_version', String(SCHEMA_VERSION));
-    setMeta.run('source_name', sourceName);
-    setMeta.run('source_bytes', String(sourceSize));
+    setMeta.run('source_name', lists.length === 1 ? lists[0].fileName : `${lists.length} lists`);
+    setMeta.run('source_bytes', String(totalSize));
+    setMeta.run('lists_key', options.key ?? '');
     setMeta.run('imported_at', new Date().toISOString());
     setMeta.run('stats', JSON.stringify(stats));
 

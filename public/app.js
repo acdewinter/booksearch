@@ -1,50 +1,18 @@
 // Shelfmark: search a command list, copy the command for any file.
 
-const $ = (id) => document.getElementById(id);
-const fmt = new Intl.NumberFormat();
-const n = (value) => fmt.format(value);
-const plural = (count, one, many = `${one}s`) => `${n(count)} ${count === 1 ? one : many}`;
-
-/** Tiny element builder. Strings become text nodes, so data is never parsed as HTML. */
-function h(tag, attrs, ...children) {
-  const el = document.createElement(tag);
-  if (attrs) {
-    for (const [key, value] of Object.entries(attrs)) {
-      if (value === false || value == null) continue;
-      if (key === 'class') el.className = value;
-      else if (key.startsWith('on')) el.addEventListener(key.slice(2), value);
-      else if (value === true) el.setAttribute(key, '');
-      else el.setAttribute(key, value);
-    }
-  }
-  for (const child of children.flat(Infinity)) {
-    if (child == null || child === false) continue;
-    el.append(child);
-  }
-  return el;
-}
-
-/** replaceChildren that ignores null/false, so optional parts can be written inline. */
-function setChildren(el, ...nodes) {
-  el.replaceChildren(...nodes.flat(Infinity).filter((node) => node != null && node !== false));
-}
-
-function icon(name) {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('class', 'icon');
-  svg.setAttribute('aria-hidden', 'true');
-  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-  use.setAttribute('href', `#i-${name}`);
-  svg.append(use);
-  return svg;
-}
+import { $, askConfirm, formatBytes, h, icon, n, plural, postJson, setChildren, toast } from './dom.js';
+import {
+  activeCount, connSummary, irc, ircPost, isActive, itemFor, mountDownloads, onIrc,
+  requestCommands, startIrc, unmountDownloads,
+} from './downloads.js';
 
 // ------------------------------------------------------------------ state
 
-const state = { q: '', path: '/', all: false };
+const state = { q: '', path: '/', all: false, view: 'search' };
 let request = null; // AbortController for the view being loaded
 let search = { page: 0, hasMore: false, loading: false, terms: [] };
 let status = null;
+let drawnMode = false; // whether the rows on screen were built for asking (true) or copying
 
 const els = {
   main: $('results'),
@@ -64,7 +32,12 @@ const els = {
   tray: $('tray'),
   trayLabel: $('tray-label'),
   trayCommand: $('tray-command'),
-  toasts: $('toasts'),
+  trayAction: $('tray-action'),
+  navSearch: $('nav-search'),
+  navDownloads: $('nav-downloads'),
+  navDot: $('nav-dot'),
+  navCount: $('nav-count'),
+  keyAction: $('key-action'),
   updateDialog: $('update-dialog'),
   updateBody: $('update-body'),
   manualDialog: $('manual-copy'),
@@ -76,10 +49,12 @@ function readUrl() {
   state.q = p.get('q') || '';
   state.path = p.get('in') || '/';
   state.all = p.get('all') === '1';
+  state.view = p.get('v') === 'downloads' ? 'downloads' : 'search';
 }
 
 function writeUrl(push) {
   const p = new URLSearchParams();
+  if (state.view === 'downloads') p.set('v', 'downloads');
   if (state.q) p.set('q', state.q);
   if (state.path !== '/') p.set('in', state.path);
   if (state.all) p.set('all', '1');
@@ -107,12 +82,6 @@ async function api(endpoint, params = {}, signal) {
     throw err;
   }
   return body;
-}
-
-function toast(message) {
-  const el = h('div', { class: 'toast' }, message);
-  els.toasts.append(el);
-  setTimeout(() => el.remove(), 5000);
 }
 
 // -------------------------------------------------------------- highlight
@@ -244,13 +213,57 @@ async function copyText(text) {
   return false;
 }
 
-function showTray(label, detail) {
+let trayAction = null;
+
+/** The bar at the bottom. `action` is an optional { label, run } button. */
+function showTray(label, detail, action = null) {
+  undoable = null;
   els.trayLabel.textContent = label;
   els.trayCommand.textContent = detail;
+  trayAction = action;
+  els.trayAction.hidden = !action;
+  els.trayAction.textContent = action?.label || '';
   els.tray.hidden = false;
+}
+els.trayAction.addEventListener('click', () => trayAction?.run());
+
+/** With IRC set up, clicking a file asks for it; without, it copies the command. */
+const getMode = () => irc.configured;
+
+const ROW_LABELS = {
+  queued: 'Queued', sent: 'Asked', noreply: 'No reply', connecting: 'Starting', done: 'Saved', failed: 'Failed',
+};
+
+/** Set the label at the end of a row: copy state, or how the download is going. */
+function paintRow(row) {
+  const stateEl = row.querySelector('.row-state');
+  if (!getMode()) {
+    const copied = marks.has(markKey(row.dataset.command));
+    row.classList.toggle('was-copied', copied);
+    row.classList.remove('has-status');
+    delete row.dataset.status;
+    row.title = 'Copy this command';
+    stateEl.replaceChildren(icon(copied ? 'check' : 'copy'), copied ? 'Copied' : 'Copy');
+    return;
+  }
+  const item = itemFor(row.dataset.command);
+  const status = item && item.status !== 'cancelled' ? item.status : '';
+  row.classList.remove('was-copied');
+  row.classList.toggle('has-status', Boolean(status));
+  row.dataset.status = status;
+  row.title = status ? 'Show this file in Downloads' : 'Ask for this file in the channel';
+  let label = ROW_LABELS[status] || 'Get';
+  if (status === 'downloading') {
+    label = item.size > 0 ? `${Math.floor((item.received / item.size) * 100)}%` : 'Getting';
+  }
+  stateEl.replaceChildren(icon(status === 'done' ? 'check' : status === 'failed' ? 'close' : 'download'), label);
 }
 
 function setRowState(row, copied) {
+  if (getMode()) {
+    paintRow(row);
+    return;
+  }
   row.classList.toggle('was-copied', copied);
   const stateEl = row.querySelector('.row-state');
   stateEl.replaceChildren(icon(copied ? 'check' : 'copy'), copied ? 'Copied' : 'Copy');
@@ -278,17 +291,55 @@ async function copyRow(row) {
   showTray('Copied', command);
 }
 
+const showDownloads = { label: 'Show downloads', run: () => navigate({ view: 'downloads' }) };
+
+// The request the bar at the bottom offers to undo, until it has been sent.
+let undoable = null;
+
+/** A short note about where a fresh request stands, for the bar at the bottom. */
+function requestNote() {
+  const c = irc.conn;
+  if (!c || c.status !== 'online' || !c.channel.joined) return 'Queued until connected';
+  return 'Requested';
+}
+
+/** Ask for one file in the channel. */
+async function requestRow(row) {
+  const command = row.dataset.command;
+  const name = row.querySelector('.row-name').textContent;
+  try {
+    const [item] = await requestCommands([command]);
+    flashRows([row]);
+    if (item.already) {
+      showTray('Already in the queue', name, showDownloads);
+      return;
+    }
+    showTray(requestNote(), name, {
+      label: 'Undo',
+      run: async () => {
+        try {
+          await ircPost('act', { id: item.id, action: 'cancel' });
+          showTray('Request removed', name);
+        } catch (err) {
+          toast(err.message);
+        }
+      },
+    });
+    undoable = { id: item.id, name };
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
 // ------------------------------------------------------------------ rows
 
 function createRow(file, terms) {
   const prefix = file.c.slice(0, file.p);
   const name = file.c.slice(file.p);
-  const copied = marks.has(markKey(file.c));
-  const kindClass = file.k === 1 ? ' is-archive' : file.k === 2 ? ' is-other' : '';
+  const kindClass = ['', ' is-archive', ' is-ebook', ' is-other'][file.k] ?? ' is-other';
   const row = h('button', {
     type: 'button',
-    class: `row${copied ? ' was-copied' : ''}`,
-    title: 'Copy this command',
+    class: 'row',
     'data-command': file.c,
   },
     h('span', { class: 'row-command' },
@@ -297,9 +348,17 @@ function createRow(file, terms) {
     ),
     h('span', { class: 'row-size' }, formatSize(file.s)),
     h('span', { class: `row-ext${kindClass}` }, file.e || 'file'),
-    h('span', { class: 'row-state' }, icon(copied ? 'check' : 'copy'), copied ? 'Copied' : 'Copy'),
+    h('span', { class: 'row-state' }),
   );
-  return h('li', null, row);
+  paintRow(row);
+  if (!getMode()) return h('li', null, row);
+  // Asking for the file is the main action; copying the command stays one click away.
+  return h('li', { class: 'has-copy' }, row, h('button', {
+    type: 'button',
+    class: 'icon-button row-copy',
+    title: 'Copy the command instead',
+    'aria-label': 'Copy the command',
+  }, icon('copy')));
 }
 
 /** "306.00MB" -> "306 MB", "1.25GB" -> "1.25 GB" */
@@ -393,11 +452,40 @@ function createGroup({ path, head, total, files, q, terms }) {
   const actions = h('div', { class: 'group-actions' },
     h('span', { class: 'group-count' }, q ? plural(total, 'match', 'matches') : plural(total, 'file')),
   );
+  if (total > 1 && getMode()) {
+    const getAll = h('button', {
+      type: 'button',
+      class: 'button',
+      title: 'Ask for every file in this block, one after the other',
+      onclick: async () => {
+        const where = irc.conn?.channel?.name || 'the channel';
+        const ok = total <= 3 || await askConfirm({
+          title: `Get all ${n(total)} files?`,
+          text: `Each file is asked for in ${where}, one after the other. That can take a while, and the sender may limit how many you can have waiting.`,
+          action: `Get ${n(total)} files`,
+        });
+        if (!ok) return;
+        getAll.disabled = true;
+        try {
+          const all = await fetchAll();
+          const items = await requestCommands(all.map((f) => f.c));
+          const added = items.filter((item) => !item.already).length;
+          flashRows([...list.querySelectorAll('.row')]);
+          const from = path === '/' ? '' : `from ${path.slice(path.lastIndexOf('/') + 1)}`;
+          showTray(added ? `Queued ${plural(added, 'file')}` : 'Already in the queue', from, showDownloads);
+        } catch (err) {
+          toast(err.message);
+        }
+        getAll.disabled = false;
+      },
+    }, icon('download'), `Get all ${n(total)}`);
+    actions.append(getAll);
+  }
   if (total > 1) {
     const label = `Copy all ${n(total)}`;
     const copyAll = h('button', {
       type: 'button',
-      class: 'button',
+      class: `button${getMode() ? ' is-quiet' : ''}`,
       title: 'Copy every command in this block, one per line',
       onclick: async () => {
         copyAll.disabled = true;
@@ -520,7 +608,7 @@ function renderBrowse(data) {
 
   out.push(h('div', { class: 'place' },
     atRoot ? null : crumbsEl(folder.crumbs.slice(0, -1), { withRoot: true }),
-    h('h1', null, atRoot ? 'Browse the list' : folder.name),
+    h('h1', null, atRoot ? ((status?.lists?.length || 1) > 1 ? 'Browse the lists' : 'Browse the list') : folder.name),
     meta,
   ));
 
@@ -545,7 +633,7 @@ function renderBrowse(data) {
     out.push(h('div', { class: 'notice' },
       h('p', null, state.all
         ? 'This folder is empty in the current list.'
-        : 'Nothing here is an audio file or archive.'),
+        : 'Nothing here is a book, an audio file or an archive.'),
       state.all ? null : h('button', { type: 'button', class: 'button', onclick: () => setAll(true) }, 'Show all files'),
     ));
   }
@@ -672,7 +760,52 @@ function syncControls() {
   }
 }
 
+/** Show or hide the parts of the page that belong to one view. */
+function syncChrome() {
+  const searching = state.view === 'search';
+  const ready = status?.state === 'ready';
+  els.searchbar.hidden = !(searching && ready);
+  els.foot.hidden = !(searching && ready);
+  if (searching) {
+    els.navSearch.setAttribute('aria-current', 'page');
+    els.navDownloads.removeAttribute('aria-current');
+  } else {
+    els.navDownloads.setAttribute('aria-current', 'page');
+    els.navSearch.removeAttribute('aria-current');
+  }
+  els.keyAction.textContent = getMode() ? 'get' : 'copy';
+  document.title = searching ? 'Shelfmark' : 'Downloads · Shelfmark';
+}
+
+/** The connection light and the count next to "Downloads" in the header. */
+function renderNav() {
+  const summary = connSummary();
+  els.navDot.className = `dot is-${summary.tone}`;
+  els.navDot.hidden = !irc.configured;
+  els.navDownloads.title = irc.configured ? `IRC: ${summary.label}` : 'Set up IRC to download files from here';
+  const count = activeCount();
+  els.navCount.hidden = count === 0;
+  els.navCount.textContent = n(count);
+}
+
+/** Draw whatever the address bar says. */
+function show() {
+  syncChrome();
+  if (state.view === 'downloads') {
+    request?.abort();
+    moreObserver.disconnect();
+    els.summary.textContent = '';
+    els.tray.hidden = true; // a leftover note from the search page would cover the message box
+    mountDownloads(els.main);
+    return;
+  }
+  unmountDownloads();
+  if (status?.state === 'ready') load();
+  else init();
+}
+
 async function load() {
+  drawnMode = getMode();
   request?.abort();
   request = new AbortController();
   const { signal } = request;
@@ -691,7 +824,7 @@ async function load() {
   } catch (err) {
     if (err.name === 'AbortError') return;
     if (err.status === 404 && state.path !== '/') {
-      toast('That folder is not in the current list. Showing everything instead.');
+      toast('That folder is not in the loaded lists. Showing everything instead.');
       state.path = '/';
       writeUrl(false);
       load();
@@ -711,10 +844,10 @@ async function load() {
 }
 
 function navigate(change, { push = true } = {}) {
-  Object.assign(state, change);
+  Object.assign(state, { view: 'search' }, change);
   writeUrl(push);
   window.scrollTo({ top: 0 });
-  load();
+  show();
 }
 
 function setAll(all) {
@@ -768,12 +901,23 @@ $('tray-close').addEventListener('click', () => {
 
 window.addEventListener('popstate', () => {
   readUrl();
-  load();
+  show();
 });
 
+els.navSearch.addEventListener('click', () => navigate({ view: 'search' }));
+els.navDownloads.addEventListener('click', () => navigate({ view: 'downloads' }));
+
 els.main.addEventListener('click', (e) => {
+  const copy = e.target.closest('.row-copy');
+  if (copy) {
+    copyRow(copy.previousElementSibling);
+    return;
+  }
   const row = e.target.closest('.row');
-  if (row) copyRow(row);
+  if (!row) return;
+  if (!getMode()) copyRow(row);
+  else if (isActive(itemFor(row.dataset.command))) navigate({ view: 'downloads' });
+  else requestRow(row);
 });
 
 document.addEventListener('keydown', (e) => {
@@ -788,6 +932,7 @@ document.addEventListener('keydown', (e) => {
     els.input.select();
     return;
   }
+  if (state.view !== 'search') return;
   if (e.key === 'Escape') {
     if (state.q) clearQuery();
     else els.input.focus();
@@ -815,12 +960,6 @@ window.addEventListener('scroll', () => {
 }, { passive: true });
 
 // ---------------------------------------------------------- list updates
-
-const formatBytes = (bytes) => {
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
-  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-};
 
 const formatDate = (iso) => new Date(iso).toLocaleString(undefined, {
   day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit',
@@ -858,46 +997,77 @@ async function watchImport(progress) {
   }
 }
 
-function sendFile(file, onProgress) {
+/** Send one list file to the server. It only becomes a list once applyLists() says what it is. */
+function uploadFile(file, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/import');
+    xhr.open('POST', '/api/lists/upload');
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(e.loaded / e.total);
     };
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) return resolve();
-      let message = `The upload failed (${xhr.status}).`;
+      let body = null;
       try {
-        message = JSON.parse(xhr.responseText).error || message;
+        body = JSON.parse(xhr.responseText);
       } catch {
-        // keep the generic message
+        // not JSON
       }
-      reject(new Error(message));
+      if (xhr.status >= 200 && xhr.status < 300 && body?.token) return resolve(body.token);
+      return reject(new Error(body?.error || `Uploading ${file.name} failed (${xhr.status}).`));
     };
     xhr.onerror = () => reject(new Error('The upload was interrupted. Check your connection and try again.'));
     xhr.send(file);
   });
 }
 
+/** Tell the server what to do with uploaded files (or which lists to remove), then wait for it. */
+async function applyLists(changes, progress) {
+  await postJson('/api/lists/apply', changes);
+  progress.set('Reading folders…', 0);
+  const final = await watchImport(progress);
+  if (final.import.error) throw new Error(final.import.error);
+  return final;
+}
+
+/** "TrainFiles_audio_2026-11-21.txt" -> "TrainFiles audio" */
+function suggestListName(fileName) {
+  const name = fileName
+    .replace(/\.[A-Za-z0-9]{1,5}$/, '')
+    .replace(/\d{4}[-_.]?\d{2}[-_.]?\d{2}/g, ' ')
+    .replace(/[_\s]+/g, ' ')
+    .replace(/^[\s\-.,]+|[\s\-.,]+$/g, '')
+    .trim();
+  return name || 'List';
+}
+
+/** Letters only, so a newer file ("…_2026-12-01.txt") is recognised as the same list. */
+const listKey = (text) => text.toLowerCase().replace(/\.[a-z0-9]{1,5}$/, '').replace(/[^\p{L}]+/gu, '');
+
+function similarList(fileName, lists) {
+  const key = listKey(fileName);
+  if (!key) return null;
+  return lists.find((l) => listKey(l.fileName || '') === key || listKey(l.name) === key) || null;
+}
+
 /**
  * The file picker + progress used both on the first-run screen and in the
- * "Update the list" dialog.
+ * lists dialog. Several files can be chosen at once; each one is either a new
+ * list or a newer copy of a list that is already loaded.
  */
-function createUploader({ replacing, onDone }) {
+function createUploader({ onDone }) {
   const root = h('div', { class: 'uploader' });
-  const fileInput = h('input', { type: 'file', accept: '.txt,text/plain', class: 'visually-hidden', tabindex: '-1' });
-  const verb = replacing ? 'Replace list' : 'Load list';
+  const fileInput = h('input', { type: 'file', accept: '.txt,text/plain', multiple: true, class: 'visually-hidden', tabindex: '-1' });
+  const existing = () => status?.lists || [];
 
   function idle(error) {
     const drop = h('div', { class: 'drop' },
-      h('p', null, replacing
-        ? 'Drop the new list file here, or choose it from your computer.'
-        : 'Drop your list file here, or choose it from your computer.'),
+      h('p', null, existing().length
+        ? 'Drop list files here, or choose them from your computer. You can add several at once.'
+        : 'Drop your list files here, or choose them from your computer. You can add several at once.'),
       h('div', { class: 'drop-actions' },
-        h('button', { type: 'button', class: 'button is-primary', onclick: () => fileInput.click() }, icon('upload'), 'Choose file'),
+        h('button', { type: 'button', class: 'button is-primary', onclick: () => fileInput.click() }, icon('upload'), 'Choose files'),
       ),
     );
     drop.addEventListener('dragover', (e) => {
@@ -908,8 +1078,8 @@ function createUploader({ replacing, onDone }) {
     drop.addEventListener('drop', (e) => {
       e.preventDefault();
       drop.classList.remove('is-over');
-      const file = e.dataTransfer?.files?.[0];
-      if (file) chosen(file);
+      const files = [...(e.dataTransfer?.files || [])];
+      if (files.length) chosen(files);
     });
     setChildren(root,
       error ? h('p', { class: 'callout is-error', role: 'alert' }, error) : null,
@@ -918,87 +1088,216 @@ function createUploader({ replacing, onDone }) {
     );
   }
 
-  function chosen(file) {
-    const tooBig = status?.maxUploadBytes && file.size > status.maxUploadBytes;
+  function chosen(files) {
+    const limit = status?.maxUploadBytes;
+    const tooBig = limit && files.find((f) => f.size > limit);
     if (tooBig) {
-      idle(`${file.name} is ${formatBytes(file.size)}, which is over the ${formatBytes(status.maxUploadBytes)} upload limit.`);
+      idle(`${tooBig.name} is ${formatBytes(tooBig.size)}, which is over the ${formatBytes(limit)} upload limit.`);
       return;
     }
+    const lists = existing();
+    const claimed = new Set();
+    const picks = files.map((file, i) => {
+      // A file that looks like a newer copy of a loaded list replaces it, unless you say otherwise.
+      const match = similarList(file.name, lists);
+      const target = match && !claimed.has(match.id) ? match.id : '';
+      if (target) claimed.add(target);
+
+      const nameInput = h('input', {
+        type: 'text', id: `pick-name-${i}`, maxlength: '60', autocomplete: 'off', spellcheck: 'false',
+      });
+      nameInput.value = suggestListName(file.name);
+      const nameField = h('div', { class: 'field' }, h('label', { for: nameInput.id }, 'Name of the list'), nameInput);
+      const select = lists.length
+        ? h('select', { id: `pick-target-${i}`, 'aria-label': `What to do with ${file.name}` },
+          h('option', { value: '' }, 'Add as a new list'),
+          lists.map((l) => h('option', { value: l.id }, `Replace “${l.name}”`)))
+        : null;
+      if (select) {
+        select.value = target;
+        select.addEventListener('change', () => {
+          nameField.hidden = select.value !== '';
+        });
+      }
+      nameField.hidden = Boolean(target);
+      return {
+        file,
+        target: () => (select ? select.value : ''),
+        name: () => nameInput.value.trim(),
+        el: h('li', { class: 'pick' },
+          h('p', { class: 'drop-file' }, `${file.name} (${formatBytes(file.size)})`),
+          select ? h('div', { class: 'field' }, select) : null,
+          nameField,
+        ),
+      };
+    });
+
+    const error = h('p', { class: 'callout is-error', role: 'alert', hidden: true });
+    const verb = files.length === 1 ? 'Load list' : `Load ${n(files.length)} lists`;
     root.replaceChildren(h('div', { class: 'drop' },
-      h('p', { class: 'drop-file' }, `${file.name} (${formatBytes(file.size)})`),
-      replacing ? h('p', null, 'Everything in the current list will be replaced by this file.') : null,
+      h('ul', { class: 'picks' }, picks.map((p) => p.el)),
+      error,
       h('div', { class: 'drop-actions' },
-        h('button', { type: 'button', class: 'button is-primary', onclick: () => run(file) }, verb),
-        h('button', { type: 'button', class: 'button is-quiet', onclick: () => idle() }, 'Choose a different file'),
+        h('button', {
+          type: 'button',
+          class: 'button is-primary',
+          onclick: () => {
+            const targets = picks.map((p) => p.target()).filter(Boolean);
+            if (new Set(targets).size !== targets.length) {
+              error.textContent = 'Two files are set to replace the same list. Change one of them.';
+              error.hidden = false;
+              return;
+            }
+            run(picks);
+          },
+        }, verb),
+        h('button', { type: 'button', class: 'button is-quiet', onclick: () => idle() }, 'Choose different files'),
       ),
     ));
   }
 
-  async function run(file) {
+  async function run(picks) {
     const progress = progressEl();
-    root.replaceChildren(h('div', { class: 'drop' },
-      h('p', { class: 'drop-file' }, file.name),
-      progress.el,
-    ));
+    const label = h('p', { class: 'drop-file' });
+    root.replaceChildren(h('div', { class: 'drop' }, label, progress.el));
+    const totalBytes = picks.reduce((sum, p) => sum + p.file.size, 0) || 1;
     try {
-      progress.set('Uploading…', 0);
-      await sendFile(file, (f) => progress.set('Uploading…', f));
-      progress.set('Reading folders…', 0);
-      const final = await watchImport(progress);
-      if (final.import.error) throw new Error(final.import.error);
+      const changes = { add: [], replace: [] };
+      let sent = 0;
+      for (const [i, pick] of picks.entries()) {
+        label.textContent = picks.length > 1 ? `${pick.file.name} (${i + 1} of ${picks.length})` : pick.file.name;
+        const base = sent;
+        progress.set('Uploading…', base / totalBytes);
+        const token = await uploadFile(pick.file, (f) => progress.set('Uploading…', (base + f * pick.file.size) / totalBytes));
+        sent += pick.file.size;
+        const target = pick.target();
+        if (target) changes.replace.push({ token, id: target, fileName: pick.file.name });
+        else changes.add.push({ token, name: pick.name(), fileName: pick.file.name });
+      }
+      label.textContent = picks.length > 1 ? `Putting ${n(picks.length)} lists together` : picks[0].file.name;
+      const final = await applyLists(changes, progress);
       status = final;
       const info = final.library;
+      const what = [
+        changes.add.length ? `${plural(changes.add.length, 'list')} added` : '',
+        changes.replace.length ? `${plural(changes.replace.length, 'list')} replaced` : '',
+      ].filter(Boolean).join(', ');
       root.replaceChildren(
         h('p', { class: 'callout is-done', role: 'status' },
-          `${replacing ? 'List replaced' : 'List loaded'}: ${plural(info.files, 'file')} in ${plural(info.folders, 'folder')}.`,
+          `${what}. ${plural(info.files, 'file')} in ${plural(final.lists.length, 'list')} can now be searched.`,
           info.skippedLines ? ` ${plural(info.skippedLines, 'line')} could not be read and ${info.skippedLines === 1 ? 'was' : 'were'} skipped.` : '',
         ),
       );
       onDone(final);
     } catch (err) {
-      idle(replacing ? `${err.message} The current list has not been changed.` : err.message);
+      idle(existing().length ? `${err.message} The lists that were loaded have not been changed.` : err.message);
     }
   }
 
   fileInput.addEventListener('change', () => {
-    const file = fileInput.files?.[0];
+    const files = [...(fileInput.files || [])];
     fileInput.value = '';
-    if (file) chosen(file);
+    if (files.length) chosen(files);
   });
 
   idle();
   return root;
 }
 
-function openUpdateDialog() {
-  const info = status?.library;
+/** The dialog that shows the loaded lists, and lets you add, replace and remove them. */
+function renderListsDialog() {
+  const lists = status?.lists || [];
+  const folders = new Map((status?.library?.lists || []).map((l) => [l.id, l.folder]));
+  const body = els.updateBody;
+
+  async function remove(list) {
+    const last = lists.length === 1;
+    const ok = await askConfirm({
+      title: `Remove “${list.name}”?`,
+      text: last
+        ? 'This is the only list. After removing it there is nothing to search until you load a list again.'
+        : `Its ${plural(list.files ?? 0, 'file')} will no longer show up in the search. The other lists stay as they are.`,
+      action: 'Remove list',
+    });
+    if (!ok) return;
+    const progress = progressEl();
+    progress.set('Removing…', 0);
+    setChildren(body, h('div', { class: 'drop' }, h('p', { class: 'drop-file' }, `Removing ${list.name}`), progress.el));
+    try {
+      const final = await applyLists({ remove: [list.id] }, progress);
+      applyStatus(final);
+      renderListsDialog();
+      readUrl();
+      show();
+    } catch (err) {
+      toast(err.message);
+      renderListsDialog();
+    }
+  }
+
   const uploader = createUploader({
-    replacing: true,
     onDone: (final) => {
       applyStatus(final);
       uploader.append(h('div', { class: 'drop-actions' },
         h('button', { type: 'button', class: 'button is-primary', onclick: () => els.updateDialog.close() }, 'Done'),
+        h('button', { type: 'button', class: 'button is-quiet', onclick: () => renderListsDialog() }, 'Add more'),
       ));
       uploader.lastChild.style.marginTop = '14px';
+      listEl.replaceWith(listEl = listRows());
       readUrl();
-      load();
+      show();
     },
   });
-  setChildren(els.updateBody,
-    info ? h('dl', { class: 'facts' },
-      h('dt', null, 'Current list'), h('dd', null, info.sourceName),
-      h('dt', null, 'Loaded'), h('dd', null, formatDate(info.importedAt)),
-      h('dt', null, 'Contains'), h('dd', null, `${plural(info.files, 'file')} in ${plural(info.folders, 'folder')}`),
-    ) : null,
-    h('p', null, 'Upload a newer copy of the list to replace the current one. If the new file cannot be read, the current list stays as it is.'),
+
+  function listRows() {
+    const current = status?.lists || [];
+    if (!current.length) return h('p', null, 'No list is loaded yet.');
+    const currentFolders = new Map((status?.library?.lists || []).map((l) => [l.id, l.folder]));
+    return h('ul', { class: 'list-rows' }, current.map((list) => {
+      const folder = currentFolders.get(list.id) ?? folders.get(list.id);
+      const facts = [
+        list.files != null ? plural(list.files, 'file') : null,
+        list.fileName,
+        list.addedAt ? `loaded ${formatDate(list.addedAt)}` : null,
+      ].filter(Boolean).join(' · ');
+      return h('li', { class: 'list-row' },
+        h('div', { class: 'list-row-text' },
+          folder
+            ? h('button', {
+              type: 'button',
+              class: 'list-row-name text-button',
+              title: 'Browse and search only this list',
+              onclick: () => {
+                els.updateDialog.close();
+                navigate({ path: folder, q: '' });
+              },
+            }, list.name)
+            : h('p', { class: 'list-row-name' }, list.name),
+          h('p', { class: 'list-row-facts' }, facts),
+        ),
+        h('button', { type: 'button', class: 'button is-quiet', onclick: () => remove(list) }, 'Remove'),
+      );
+    }));
+  }
+
+  let listEl = listRows();
+  setChildren(body,
+    listEl,
+    h('p', null, lists.length
+      ? 'Add more lists to search them all together, or load a newer copy of one to replace it. If a file cannot be read, nothing changes.'
+      : 'Load one or more list files to get started.'),
     uploader,
   );
+}
+
+function openListsDialog() {
+  renderListsDialog();
   els.updateDialog.showModal();
 }
-els.listButton.addEventListener('click', openUpdateDialog);
+els.listButton.addEventListener('click', openListsDialog);
 
 // Close dialogs when the backdrop is clicked.
-for (const dialog of [els.updateDialog, els.manualDialog]) {
+for (const dialog of [els.updateDialog, els.manualDialog, $('confirm-dialog')]) {
   dialog.addEventListener('click', (e) => {
     if (e.target === dialog) dialog.close();
   });
@@ -1010,12 +1309,14 @@ function applyStatus(s) {
   status = s;
   const info = s.library;
   const ready = s.state === 'ready';
-  els.searchbar.hidden = !ready;
   els.listButton.hidden = !ready;
-  els.foot.hidden = !ready;
+  syncChrome();
   if (info) {
+    const count = s.lists?.length || 1;
     const day = new Date(info.importedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-    els.listSummary.textContent = `${plural(info.files, 'file')}, loaded ${day}`;
+    els.listSummary.textContent = count > 1
+      ? `${plural(info.files, 'file')} in ${n(count)} lists`
+      : `${plural(info.files, 'file')}, loaded ${day}`;
   }
 }
 
@@ -1032,13 +1333,14 @@ async function init() {
     return;
   }
   applyStatus(s);
+  if (state.view === 'downloads') return;
 
   if (s.import.running && s.state !== 'ready') {
     const progress = progressEl();
     progress.set(`${s.import.phase}…`, s.import.progress);
     els.main.replaceChildren(h('div', { class: 'notice' },
       h('h1', null, 'Loading the list'),
-      h('p', null, 'This takes a few seconds. The page continues on its own when it is done.'),
+      h('p', null, 'This takes a few seconds, a little longer for very large lists. The page continues on its own when it is done.'),
       progress.el,
     ));
     try {
@@ -1053,17 +1355,53 @@ async function init() {
   if (s.state !== 'ready') {
     els.main.replaceChildren(h('div', { class: 'notice' },
       h('h1', null, 'No list loaded yet'),
-      h('p', null, 'Upload the text file that lists your commands. Each command sits on its own line and starts with “!”.'),
+      h('p', null, 'Upload the text files that list your commands. Each command sits on its own line and starts with “!”. Lists from different sources can be loaded side by side and are searched together.'),
       s.import.error ? h('p', { class: 'callout is-error' }, `The last upload failed: ${s.import.error}`) : null,
-      createUploader({ replacing: false, onDone: () => setTimeout(init, 900) }),
+      createUploader({ onDone: () => setTimeout(init, 900) }),
     ));
     return;
   }
 
-  readUrl();
   renderMarksNote();
   await load();
   if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) els.input.focus({ preventScroll: true });
 }
 
+// Keep the page in step with the IRC side: the header light, and the label on every file row.
+onIrc((kind, payload) => {
+  renderNav();
+  if (kind === 'all') {
+    syncChrome();
+    if (state.view !== 'search' || status?.state !== 'ready') return;
+    if (drawnMode !== getMode()) {
+      // Rows are built differently with and without IRC, so draw the results again.
+      drawnMode = getMode();
+      load();
+    } else {
+      for (const row of els.main.querySelectorAll('.row')) paintRow(row);
+    }
+    return;
+  }
+  if (kind !== 'download' && kind !== 'remove') return;
+  if (undoable?.id === payload.id && (kind === 'remove' || payload.status !== 'queued')) {
+    const { name } = undoable;
+    if (kind === 'remove') {
+      undoable = null;
+      els.tray.hidden = true;
+    } else {
+      showTray('Sent to the channel', name, showDownloads);
+    }
+  }
+  if (payload.command && state.view === 'search') {
+    for (const row of els.main.querySelectorAll('.row')) {
+      if (row.dataset.command === payload.command) paintRow(row);
+    }
+  }
+});
+
+readUrl();
+renderNav();
+renderMarksNote();
+startIrc();
+if (state.view === 'downloads') show();
 init();

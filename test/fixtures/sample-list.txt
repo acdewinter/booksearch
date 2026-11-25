@@ -30,3 +30,9 @@
 ================================================================================
 !TrainFiles fa2ce5764381 | Enchantment of Music 640612 540 1st Song - 'Fantaisie Impromptu' by Frédéric Chopin {AFRTS}_OTRRPG.mp3 ::INFO:: 27.19MB
 !TrainFiles 0000000000c1 | Big Show.flac ::INFO:: 1.32GB
+
+/books/P/Pratchett, Terry
+================================================================================
+!TrainFiles 00000000b001 | Pratchett, Terry - Discworld 04 - Mort.epub ::INFO:: 412.10KB
+!TrainFiles 00000000b002 | Pratchett, Terry - Discworld 04 - Mort.mobi ::INFO:: 530.00KB
+!TrainFiles 00000000b003 | Pratchett, Terry - Discworld 04 - Mort.jpg ::INFO:: 88.00KB

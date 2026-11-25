@@ -1,7 +1,7 @@
 {
   "name": "shelfmark",
-  "version": "1.0.0",
-  "description": "Search an audiobook command list and copy the command for any file.",
+  "version": "1.1.0",
+  "description": "Search an audiobook command list, request files over IRC and receive them over DCC.",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,6 +11,7 @@
     "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/index.js",
     "dev": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning --watch server/index.js",
     "import": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/import-cli.js",
+    "fake-irc": "node dev/fake-irc.js",
     "test": "node --disable-warning=ExperimentalWarning --test"
   }
 }

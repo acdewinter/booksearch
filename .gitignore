@@ -1,5 +1,6 @@
-# The database and uploaded list (created at runtime)
+# The database and uploaded list (created at runtime), and downloaded files
 data/
+downloads/
 
 # List files stay out of the repository: they are large, and you load them
 # through the app's "Update list" button instead.

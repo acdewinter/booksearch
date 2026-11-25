@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA_VERSION } from './build.js';
+import { KIND_OTHER } from './parse.js';
 import { parseQuery } from './query.js';
 
 const GROUPS_PER_PAGE = 20;
@@ -12,6 +13,9 @@ const MAX_FILES_PER_REQUEST = 5000;
 const FOLDER_MATCHES = 8;
 const SECTION_SPLIT = 6;    // a folder with this few sub-folders is opened up on the start page
 const SECTION_PREVIEW = 60;  // sub-folders listed per section on the start page
+
+/** The highest file kind to include: everything, or everything except extras. */
+const maxKindFor = (all) => (all ? KIND_OTHER : KIND_OTHER - 1);
 
 const FILE_COLUMNS = 'f.id, f.command, f.name_pos, f.ext, f.kind, f.size_label';
 
@@ -70,6 +74,7 @@ export class Library {
         ...JSON.parse(meta.stats),
         sourceName: meta.source_name,
         importedAt: meta.imported_at,
+        listsKey: meta.lists_key ?? '',
       };
       this.#prepare();
       return true;
@@ -168,7 +173,7 @@ export class Library {
     };
     if (!parsed) return { ...base, total: { files: 0, folders: 0 }, groups: [], folderMatches: [], hasMore: false };
 
-    const maxKind = all ? 2 : 1;
+    const maxKind = maxKindFor(all);
     let rows;
     try {
       rows = this.st.search.all(
@@ -290,7 +295,7 @@ export class Library {
       if (sections.length > 8 || !sections.some((s) => s.children.length)) sections = null;
     }
 
-    const maxKind = all ? 2 : 1;
+    const maxKind = maxKindFor(all);
     const directTotal = all ? folder.direct_files : folder.direct_main;
     const items = directTotal
       ? this.st.filesInFolder.all(folder.id, maxKind, BROWSE_FILES, 0).map(toFile)
@@ -314,7 +319,7 @@ export class Library {
   files({ path, q = '', all = false, offset = 0, limit = MAX_FILES_PER_REQUEST }) {
     const folder = this.#folder(path);
     if (!folder) return { notFound: true };
-    const maxKind = all ? 2 : 1;
+    const maxKind = maxKindFor(all);
     const take = Math.max(1, Math.min(limit, MAX_FILES_PER_REQUEST));
     const parsed = parseQuery(q);
     if (parsed) {
