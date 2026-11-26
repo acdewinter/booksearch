@@ -138,6 +138,11 @@ export class Library {
         `SELECT ${FILE_COLUMNS} FROM files_fts JOIN files f ON f.id = files_fts.rowid
          WHERE files_fts MATCH ? AND f.folder_id = ? AND f.kind <= ? ORDER BY f.id LIMIT ? OFFSET ?`,
       ),
+      countMatches: db.prepare(
+        `SELECT count(*) AS files, count(DISTINCT f.folder_id) AS folders
+         FROM files_fts JOIN files f ON f.id = files_fts.rowid
+         WHERE files_fts MATCH ? AND f.kind <= ?`,
+      ),
       countMatchesInFolder: db.prepare(
         `SELECT count(*) AS n FROM files_fts JOIN files f ON f.id = files_fts.rowid
          WHERE files_fts MATCH ? AND f.folder_id = ? AND f.kind <= ?`,
@@ -203,6 +208,19 @@ export class Library {
       hasMore: (page + 1) * GROUPS_PER_PAGE < total.folders,
       folderMatches: page === 0 ? this.#folderMatches(parsed, scope, all) : [],
     };
+  }
+
+  /** How many files, in how many folders, a search would find. Nothing is fetched. */
+  count({ q, all = false }) {
+    const parsed = parseQuery(q);
+    if (!parsed || !this.ready) return { files: 0, folders: 0 };
+    try {
+      const row = this.st.countMatches.get(parsed.match, maxKindFor(all));
+      return { files: row.files, folders: row.folders };
+    } catch (err) {
+      if (err.code !== 'ERR_SQLITE_ERROR') throw err;
+      return { files: 0, folders: 0 };
+    }
   }
 
   /** Folders whose own name matches come first; then folders matched through a parent. */

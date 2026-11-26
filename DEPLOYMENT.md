@@ -100,6 +100,12 @@ nano /etc/shelfmark.env        # fill in APP_PASSWORD=
 systemctl restart shelfmark
 ```
 
+To sign in with your Hardcover account instead (or as well), and to get the
+Library page, add `HARDCOVER_CLIENT_ID=` and `HARDCOVER_CLIENT_SECRET=` to the
+same file; the README explains where they come from under *Signing in*.
+Hardcover only redirects back to an `https` address (or to `localhost`), so
+this needs your reverse proxy in front of the container.
+
 Then open `http://CONTAINER-ADDRESS:3000`, upload your list, and continue with
 [Connecting to IRC](#connecting-to-irc).
 
@@ -168,8 +174,11 @@ git push -u origin main
 
 | Name            | Suggested value | Why |
 |-----------------|-----------------|-----|
-| `APP_PASSWORD`  | a password of your choice | Makes the browser ask for a password. Set it: anyone who can open the app can replace the list and use the IRC connection. |
+| `APP_PASSWORD`  | a password of your choice | Makes the app ask for a password. Set this or the Hardcover pair below: anyone who can open the app can replace the list and use the IRC connection. |
 | `APP_USERNAME`  | leave empty     | Only if you also want a specific username to be required. |
+| `HARDCOVER_CLIENT_ID`, `HARDCOVER_CLIENT_SECRET` | from your app on Hardcover | Sign in with Hardcover and see your library. Register `https://books.your-domain.example/oauth/callback` as the app's redirect URI. See *Signing in* in the README. |
+| `HARDCOVER_ALLOWED_USERS` | leave empty | Hardcover usernames that may sign in. Empty: only the first account that signs in. |
+| `APP_URL`       | leave empty     | Your domain, with `https://`. Only if signing in sends you back to the wrong address. |
 | `MAX_UPLOAD_MB` | leave empty     | Upload limit for one list file, 512 MB by default. |
 
 **Health check**: the Dockerfile contains one (`/healthz`, port `3000`).
@@ -243,7 +252,9 @@ Skip all of this until a download fails with a message that mentions
   is added, replaced or removed, and for a moment the old and the new one
   exist side by side, so allow about 1 GB of disk for the data folder.
 - **Backups**: the lists can be uploaded again. The file `irc-settings.json` in
-  the data folder holds your IRC settings, including any passwords you saved.
+  the data folder holds your IRC settings, including any passwords you saved,
+  and `hardcover/accounts.json` holds the tokens for your Hardcover account
+  (they can read your library, nothing else). Treat the data folder as private.
 
 ## Troubleshooting
 
@@ -259,6 +270,10 @@ Skip all of this until a download fails with a message that mentions
 | "Could not join #channel …" | The message says why (key, invite-only, registered nicknames only). Fix it in **Settings** and press **Try joining again**. |
 | The server's certificate "could not be verified" | Only for a server you trust: turn off **Check the server's security certificate** under More options. |
 | Upload of the list fails with "larger than the … MB limit" | Raise `MAX_UPLOAD_MB`. |
+| Hardcover shows an error instead of asking to approve | The redirect URI registered for the app on Hardcover is not exactly the one the app sends. The app prints the one it expects when it starts; set `APP_URL` if that is not your public address. |
+| "Signing in with Hardcover did not work" | The client id or secret is wrong, or the redirect URI differs. The app's log has the reason Hardcover gave. |
+| "That Hardcover account is not allowed to use this app" | Someone else's account owns the app, or yours is not in `HARDCOVER_ALLOWED_USERS`. To start over, delete `auth.json` in the data folder and restart. |
+| The library says a scope is missing | On Hardcover, allow the app `read:me:content`, `read:library` and `read:lists`, then sign in again. |
 
 ## Running it with plain Docker
 

@@ -1,14 +1,20 @@
 // Shelfmark: search a command list, copy the command for any file.
 
-import { $, askConfirm, formatBytes, h, icon, n, plural, postJson, setChildren, toast } from './dom.js';
+import { $, askConfirm, formatBytes, getJson, h, icon, n, plural, postJson, setChildren, toast } from './dom.js';
 import {
   activeCount, connSummary, irc, ircPost, isActive, itemFor, mountDownloads, onIrc,
   requestCommands, startIrc, unmountDownloads,
 } from './downloads.js';
+import {
+  audioLength, coverEl, day, forgetLibrary, mountLibrary, seriesLabel, statusEl, unmountLibrary,
+} from './library.js';
+import { hardcoverSignInUrl, hardcoverUser, loadSession, session, signInProblem } from './session.js';
 
 // ------------------------------------------------------------------ state
 
-const state = { q: '', path: '/', all: false, view: 'search' };
+// `book` is the Hardcover book being looked for (its panel sits above the results);
+// `shelf` and `list` are what the Library page shows.
+const state = { q: '', path: '/', all: false, view: 'search', book: 0, shelf: '', list: '' };
 let request = null; // AbortController for the view being loaded
 let search = { page: 0, hasMore: false, loading: false, terms: [] };
 let status = null;
@@ -33,8 +39,14 @@ const els = {
   trayLabel: $('tray-label'),
   trayCommand: $('tray-command'),
   trayAction: $('tray-action'),
+  views: $('views'),
   navSearch: $('nav-search'),
+  navLibrary: $('nav-library'),
   navDownloads: $('nav-downloads'),
+  accountButton: $('account-button'),
+  accountName: $('account-name'),
+  accountDialog: $('account-dialog'),
+  accountBody: $('account-body'),
   navDot: $('nav-dot'),
   navCount: $('nav-count'),
   keyAction: $('key-action'),
@@ -49,15 +61,26 @@ function readUrl() {
   state.q = p.get('q') || '';
   state.path = p.get('in') || '/';
   state.all = p.get('all') === '1';
-  state.view = p.get('v') === 'downloads' ? 'downloads' : 'search';
+  const v = p.get('v');
+  state.view = v === 'downloads' || v === 'library' ? v : 'search';
+  state.book = Number.parseInt(p.get('book') || '', 10) || 0;
+  state.shelf = p.get('shelf') || '';
+  state.list = p.get('list') || '';
 }
 
 function writeUrl(push) {
   const p = new URLSearchParams();
-  if (state.view === 'downloads') p.set('v', 'downloads');
-  if (state.q) p.set('q', state.q);
-  if (state.path !== '/') p.set('in', state.path);
-  if (state.all) p.set('all', '1');
+  if (state.view !== 'search') p.set('v', state.view);
+  if (state.view === 'library') {
+    if (state.shelf) p.set('shelf', state.shelf);
+    if (state.list) p.set('list', state.list);
+  }
+  if (state.view === 'search' && state.book) p.set('book', String(state.book));
+  if (state.view !== 'library') {
+    if (state.q) p.set('q', state.q);
+    if (state.path !== '/') p.set('in', state.path);
+    if (state.all) p.set('all', '1');
+  }
   const qs = p.toString();
   const url = qs ? `?${qs}` : location.pathname;
   if (push) history.pushState(null, '', url);
@@ -69,19 +92,7 @@ async function api(endpoint, params = {}, signal) {
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== '' && value !== false) p.set(key, value === true ? '1' : value);
   }
-  const res = await fetch(`/api/${endpoint}?${p}`, { signal, headers: { Accept: 'application/json' } });
-  let body = null;
-  try {
-    body = await res.json();
-  } catch {
-    // not JSON
-  }
-  if (!res.ok) {
-    const err = new Error(body?.error || `The server answered with an error (${res.status}).`);
-    err.status = res.status;
-    throw err;
-  }
-  return body;
+  return getJson(`/api/${endpoint}?${p}`, signal);
 }
 
 // -------------------------------------------------------------- highlight
@@ -766,15 +777,12 @@ function syncChrome() {
   const ready = status?.state === 'ready';
   els.searchbar.hidden = !(searching && ready);
   els.foot.hidden = !(searching && ready);
-  if (searching) {
-    els.navSearch.setAttribute('aria-current', 'page');
-    els.navDownloads.removeAttribute('aria-current');
-  } else {
-    els.navDownloads.setAttribute('aria-current', 'page');
-    els.navSearch.removeAttribute('aria-current');
+  for (const [name, button] of [['search', els.navSearch], ['library', els.navLibrary], ['downloads', els.navDownloads]]) {
+    if (state.view === name) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   }
   els.keyAction.textContent = getMode() ? 'get' : 'copy';
-  document.title = searching ? 'Shelfmark' : 'Downloads · Shelfmark';
+  document.title = { search: 'Shelfmark', library: 'Library · Shelfmark', downloads: 'Downloads · Shelfmark' }[state.view];
 }
 
 /** The connection light and the count next to "Downloads" in the header. */
@@ -791,15 +799,31 @@ function renderNav() {
 /** Draw whatever the address bar says. */
 function show() {
   syncChrome();
-  if (state.view === 'downloads') {
+  if (state.view !== 'search') {
     request?.abort();
     moreObserver.disconnect();
     els.summary.textContent = '';
-    els.tray.hidden = true; // a leftover note from the search page would cover the message box
+    els.tray.hidden = true; // a leftover note from the search page would cover what is below
+  }
+  if (state.view === 'downloads') {
+    unmountLibrary();
     mountDownloads(els.main);
     return;
   }
   unmountDownloads();
+  if (state.view === 'library') {
+    mountLibrary(els.main, {
+      shelf: state.shelf,
+      list: state.list,
+      onChange: (change) => {
+        Object.assign(state, change);
+        writeUrl(false);
+      },
+      onOpen: openBook,
+    });
+    return;
+  }
+  unmountLibrary();
   if (status?.state === 'ready') load();
   else init();
 }
@@ -814,13 +838,25 @@ async function load() {
   syncControls();
 
   try {
+    // Asked for alongside the results, so the panel and the files appear together.
+    const looking = state.book ? findBook(state.book, state.all).catch((err) => {
+      if (err.name !== 'AbortError') state.book = 0;
+      return null;
+    }) : null;
     if (state.q.trim()) {
       const data = await api('search', { q: state.q, path: state.path, all: state.all }, signal);
+      const match = await looking;
+      if (signal.aborted) return;
       renderSearch(data, false);
+      if (match) els.main.prepend(bookPanel(match, data.total.files));
     } else {
       const data = await api('browse', { path: state.path, all: state.all }, signal);
+      const match = await looking;
+      if (signal.aborted) return;
       renderBrowse(data);
+      if (match) els.main.prepend(bookPanel(match, null));
     }
+    if (looking && !state.book) writeUrl(false); // the book is gone from the library: drop it from the address
   } catch (err) {
     if (err.name === 'AbortError') return;
     if (err.status === 404 && state.path !== '/') {
@@ -846,9 +882,138 @@ async function load() {
 function navigate(change, { push = true } = {}) {
   Object.assign(state, { view: 'search' }, change);
   writeUrl(push);
-  window.scrollTo({ top: 0 });
+  if (state.view !== 'library') window.scrollTo({ top: 0 }); // the Library page goes back to where you were
   show();
 }
+
+// ------------------------------------------------- a book from the library
+
+const found = new Map(); // "book id|all" -> what the server found for it
+
+/** Ask the server which searches find this book in the lists. */
+function findBook(id, all) {
+  const key = `${id}|${all ? 1 : 0}`;
+  if (!found.has(key)) {
+    const asked = api('hardcover/match', { book: id, all });
+    asked.catch(() => found.delete(key));
+    found.set(key, asked);
+  }
+  return found.get(key);
+}
+
+/** A book was picked on the Library page: show the search that finds it. */
+async function openBook(book) {
+  try {
+    const match = await findBook(book.id, state.all);
+    navigate({ book: book.id, q: match.best || match.queries[0]?.q || '', path: '/' });
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+/** Run one of the searches offered for the book, in place. */
+function trySearch(q) {
+  clearTimeout(typing);
+  state.q = q;
+  state.path = '/';
+  writeUrl(false);
+  load();
+}
+
+/**
+ * The panel above the results while a book is being looked for: what the book
+ * is, and the searches that find it (or come close).
+ * `shownFiles` is how many files the search on screen found; null while browsing.
+ */
+function bookPanel(match, shownFiles) {
+  const { book } = match;
+  const facts = [
+    book.year,
+    book.pages ? `${n(book.pages)} pages` : '',
+    book.audioSeconds ? `${audioLength(book.audioSeconds)} of audio` : '',
+    book.rating ? `★ ${book.rating.toLocaleString(undefined, { maximumFractionDigits: 2 })} on Hardcover${book.ratings ? ` (${plural(book.ratings, 'rating')})` : ''}` : '',
+  ].filter(Boolean);
+  const mine = [
+    book.myRating ? `You rated it ★ ${book.myRating}` : '',
+    book.finished ? `Finished ${day(book.finished)}` : book.started ? `Started ${day(book.started)}` : '',
+    book.added ? `Added ${day(book.added)}` : '',
+    book.format ? `Your edition: ${book.format}` : '',
+    book.owned ? 'Owned' : '',
+    book.lists?.length ? `In ${book.lists.length === 1 ? 'your list' : 'your lists'} ${book.lists.map((l) => `“${l}”`).join(', ')}` : '',
+  ].filter(Boolean);
+  const others = (book.contributors || []).map((c) => `${c.name} (${c.role.toLowerCase()})`);
+
+  const description = book.description ? h('p', { class: 'bookcard-text' }, book.description) : null;
+  const moreButton = description ? h('button', {
+    type: 'button', class: 'text-button', hidden: true,
+    onclick: () => {
+      const open = description.classList.toggle('is-open');
+      moreButton.textContent = open ? 'Show less' : 'Show more';
+    },
+  }, 'Show more') : null;
+  // Only offer "Show more" when the text really is cut off.
+  if (description) requestAnimationFrame(() => {
+    moreButton.hidden = description.scrollHeight <= description.clientHeight + 2;
+  });
+
+  const current = state.q.trim();
+  const tries = match.queries.filter((t) => t.files > 0).map((t) => h('button', {
+    type: 'button',
+    class: 'try',
+    'aria-pressed': String(t.q === current),
+    title: `Search for: ${t.q}`,
+    onclick: () => trySearch(t.q),
+  }, t.label, h('span', { class: 'try-count' }, n(t.files))));
+
+  let verdict;
+  if (!match.listLoaded) {
+    verdict = 'No list is loaded yet, so there is nothing to look in.';
+  } else if (!match.best) {
+    verdict = tries.length
+      ? 'Nothing in the lists has this title. These come close:'
+      : `Nothing in the lists matches this book or its author${state.all ? '' : ' (covers and other extras are not counted)'}.`;
+  } else if (shownFiles === 0 && current) {
+    verdict = 'Your search finds nothing. These do:';
+  } else {
+    verdict = 'Looked for in the lists as:';
+  }
+
+  return h('section', { class: 'bookcard', 'aria-label': `Looking for ${book.title}` },
+    coverEl(book),
+    h('div', { class: 'bookcard-main' },
+      h('p', { class: 'bookcard-kicker' },
+        h('button', { type: 'button', class: 'text-button', onclick: () => navigate({ view: 'library' }) }, 'Library'),
+        h('span', { class: 'crumb-sep', 'aria-hidden': 'true' }, '/'),
+        statusEl(book.status) || 'On one of your lists',
+      ),
+      h('h1', null, book.title),
+      book.subtitle ? h('p', { class: 'bookcard-sub' }, book.subtitle) : null,
+      h('p', { class: 'bookcard-by' },
+        book.authors.length ? `by ${book.authors.join(', ')}` : 'Author unknown',
+        book.series ? h('span', { class: 'bookcard-series' }, ` · ${seriesLabel(book.series)}`) : null,
+      ),
+      facts.length ? h('p', { class: 'bookcard-facts' }, facts.join(' · ')) : null,
+      mine.length ? h('p', { class: 'bookcard-facts' }, mine.join(' · ')) : null,
+      others.length ? h('p', { class: 'bookcard-facts' }, `With ${others.join(', ')}`) : null,
+      book.genres?.length ? h('p', { class: 'bookcard-facts' }, book.genres.join(', ')) : null,
+      description,
+      h('p', { class: 'bookcard-links' },
+        moreButton,
+        book.url ? h('a', { class: 'text-button', href: book.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open on Hardcover', icon('out')) : null,
+      ),
+    ),
+    h('button', {
+      type: 'button', class: 'icon-button bookcard-close', 'aria-label': 'Stop looking for this book', title: 'Stop looking for this book',
+      onclick: () => {
+        state.book = 0;
+        writeUrl(false);
+        load();
+      },
+    }, icon('close')),
+    h('div', { class: 'bookcard-tries' }, h('span', { class: 'bookcard-verdict' }, verdict), tries),
+  );
+}
+
 
 function setAll(all) {
   state.all = all;
@@ -893,18 +1058,20 @@ els.showAll.addEventListener('click', () => setAll(true));
 $('home-link').addEventListener('click', (e) => {
   if (e.metaKey || e.ctrlKey || e.shiftKey) return;
   e.preventDefault();
-  navigate({ q: '', path: '/' });
+  navigate({ q: '', path: '/', book: 0 });
 });
 $('tray-close').addEventListener('click', () => {
   els.tray.hidden = true;
 });
 
 window.addEventListener('popstate', () => {
+  if (!started) return;
   readUrl();
   show();
 });
 
 els.navSearch.addEventListener('click', () => navigate({ view: 'search' }));
+els.navLibrary.addEventListener('click', () => navigate({ view: 'library' }));
 els.navDownloads.addEventListener('click', () => navigate({ view: 'downloads' }));
 
 els.main.addEventListener('click', (e) => {
@@ -1297,7 +1464,7 @@ function openListsDialog() {
 els.listButton.addEventListener('click', openListsDialog);
 
 // Close dialogs when the backdrop is clicked.
-for (const dialog of [els.updateDialog, els.manualDialog, $('confirm-dialog')]) {
+for (const dialog of [els.updateDialog, els.manualDialog, els.accountDialog, $('confirm-dialog')]) {
   dialog.addEventListener('click', (e) => {
     if (e.target === dialog) dialog.close();
   });
@@ -1307,6 +1474,7 @@ for (const dialog of [els.updateDialog, els.manualDialog, $('confirm-dialog')]) 
 
 function applyStatus(s) {
   status = s;
+  found.clear(); // the lists may have changed, and with them what each book finds
   const info = s.library;
   const ready = s.state === 'ready';
   els.listButton.hidden = !ready;
@@ -1333,7 +1501,7 @@ async function init() {
     return;
   }
   applyStatus(s);
-  if (state.view === 'downloads') return;
+  if (state.view !== 'search') return;
 
   if (s.import.running && s.state !== 'ready') {
     const progress = progressEl();
@@ -1399,9 +1567,163 @@ onIrc((kind, payload) => {
   }
 });
 
-readUrl();
-renderNav();
-renderMarksNote();
-startIrc();
-if (state.view === 'downloads') show();
-init();
+// ---------------------------------------------------------------- account
+
+function accountLabel() {
+  const user = hardcoverUser();
+  if (user) return user.username ? `@${user.username}` : user.name || 'Account';
+  return 'Account';
+}
+
+function renderAccountDialog() {
+  const user = hardcoverUser();
+  const out = [];
+  if (user) {
+    out.push(h('p', null, 'Signed in with Hardcover as ', h('strong', null, user.name || `@${user.username}`), user.name ? ` (@${user.username})` : '', '.'));
+  } else if (session.authRequired) {
+    out.push(h('p', null, 'Signed in with the app password.'));
+  }
+  if (session.methods.hardcover && !user) {
+    out.push(h('p', null, 'Connect your Hardcover account to see your library here and look for its books in the lists.'));
+  }
+  const actions = h('div', { class: 'form-actions' });
+  if (session.methods.hardcover && !user) {
+    actions.append(h('a', { class: 'button is-primary', href: hardcoverSignInUrl('/?v=library') }, 'Connect Hardcover'));
+  }
+  if (session.authRequired) {
+    actions.append(h('button', {
+      type: 'button', class: `button${user || !session.methods.hardcover ? ' is-primary' : ' is-quiet'}`,
+      onclick: async () => {
+        try {
+          await postJson('/api/logout');
+          location.assign('/');
+        } catch (err) {
+          toast(err.message);
+        }
+      },
+    }, 'Sign out'));
+  }
+  if (user) {
+    actions.append(h('button', {
+      type: 'button', class: 'button is-quiet',
+      onclick: async () => {
+        els.accountDialog.close();
+        const ok = await askConfirm({
+          title: 'Disconnect Hardcover?',
+          text: 'The copy of your library kept here is deleted and this app loses its access to your Hardcover account. Nothing changes on Hardcover itself. You can connect again at any time.',
+          action: 'Disconnect',
+        });
+        if (!ok) return;
+        try {
+          await postJson('/api/hardcover/disconnect');
+          forgetLibrary();
+          location.assign('/');
+        } catch (err) {
+          toast(err.message);
+        }
+      },
+    }, 'Disconnect Hardcover'));
+  }
+  out.push(actions);
+  setChildren(els.accountBody, out);
+}
+
+els.accountButton.addEventListener('click', () => {
+  renderAccountDialog();
+  els.accountDialog.showModal();
+});
+
+/** The page someone sees before they are let in. */
+function renderSignIn(problem) {
+  document.title = 'Sign in · Shelfmark';
+  const error = h('p', { class: 'callout is-error', role: 'alert', hidden: !problem }, problem || '');
+  const out = [
+    h('h1', null, 'Sign in'),
+    h('p', null, 'This Shelfmark is private. Sign in to search the lists, ask for files and see your library.'),
+    error,
+  ];
+  if (session.methods.hardcover) {
+    out.push(h('div', { class: 'drop-actions' },
+      h('a', { class: 'button is-primary', href: hardcoverSignInUrl() }, 'Sign in with Hardcover')));
+  }
+  if (session.methods.password) {
+    const user = session.methods.username
+      ? h('input', { type: 'text', id: 'signin-user', autocomplete: 'username', autocapitalize: 'off', spellcheck: 'false', required: true })
+      : null;
+    const pass = h('input', { type: 'password', id: 'signin-pass', autocomplete: 'current-password', required: true });
+    const submit = h('button', { type: 'submit', class: `button${session.methods.hardcover ? '' : ' is-primary'}` }, 'Sign in');
+    const form = h('form', { class: 'form signin-form' },
+      session.methods.hardcover ? h('p', { class: 'signin-or' }, 'Or use the app password:') : null,
+      user ? h('div', { class: 'field' }, h('label', { for: 'signin-user' }, 'Username'), user) : null,
+      h('div', { class: 'field' }, h('label', { for: 'signin-pass' }, 'Password'), pass),
+      h('div', { class: 'form-actions' }, submit),
+    );
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      submit.disabled = true;
+      error.hidden = true;
+      try {
+        await postJson('/api/login', { username: user?.value || '', password: pass.value });
+        location.reload();
+      } catch (err) {
+        error.textContent = err.message;
+        error.hidden = false;
+        submit.disabled = false;
+        pass.select();
+      }
+    });
+    out.push(form);
+    if (!session.methods.hardcover) requestAnimationFrame(() => (user || pass).focus());
+  }
+  els.main.replaceChildren(h('div', { class: 'notice signin' }, out));
+}
+
+// ------------------------------------------------------------------ start
+
+let started = false;
+
+async function start() {
+  readUrl();
+  const params = new URLSearchParams(location.search);
+  const problem = signInProblem(params.get('signin'));
+  if (params.has('signin')) {
+    params.delete('signin');
+    history.replaceState(null, '', params.size ? `?${params}` : location.pathname);
+  }
+
+  try {
+    await loadSession();
+  } catch (err) {
+    els.main.replaceChildren(h('div', { class: 'notice' },
+      h('h1', null, 'The server did not answer'),
+      h('p', null, err.status ? err.message : 'Check that the app is running, then try again.'),
+      h('button', { type: 'button', class: 'button', onclick: () => start() }, 'Try again'),
+    ));
+    return;
+  }
+  if (session.authRequired && !session.signedIn) {
+    renderSignIn(problem);
+    return;
+  }
+
+  started = true;
+  els.views.hidden = false;
+  els.navLibrary.hidden = !session.methods.hardcover;
+  els.accountButton.hidden = !session.authRequired;
+  els.accountName.textContent = accountLabel();
+  if (state.view === 'library' && !session.methods.hardcover) state.view = 'search';
+  if (problem) toast(problem);
+
+  renderNav();
+  renderMarksNote();
+  startIrc();
+  if (state.view !== 'search') show();
+  init();
+}
+
+// The session ran out while the page was open: start over at the sign-in page.
+window.addEventListener('shelfmark:signed-out', () => {
+  if (started) location.reload();
+});
+
+start();

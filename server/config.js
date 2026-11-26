@@ -28,6 +28,11 @@ try {
   // not important
 }
 
+const trimSlash = (value) => String(value || '').trim().replace(/\/+$/, '');
+
+/** "adrian, Someone Else" -> ['adrian', 'someone else'] */
+const nameList = (value) => String(value || '').split(',').map((s) => s.trim().replace(/^@/, '').toLowerCase()).filter(Boolean);
+
 export const config = {
   version,
   root,
@@ -36,9 +41,24 @@ export const config = {
   port: number(process.env.PORT, 3000),
   host: process.env.HOST || '0.0.0.0',
   maxUploadBytes: number(process.env.MAX_UPLOAD_MB, 512) * 1024 * 1024,
-  // Optional sign-in for the whole app (HTTP Basic). Empty = no sign-in.
+  // The address people open the app at, such as https://books.example.com.
+  // Empty = taken from each request (fine behind most proxies).
+  appUrl: trimSlash(process.env.APP_URL),
+  // Optional sign-in with a password. Empty = no password sign-in.
   username: process.env.APP_USERNAME || '',
   password: process.env.APP_PASSWORD || '',
+
+  // Sign in with Hardcover (an OAuth app made at hardcover.app/account/developer-apps).
+  hardcover: {
+    clientId: (process.env.HARDCOVER_CLIENT_ID || '').trim(),
+    clientSecret: (process.env.HARDCOVER_CLIENT_SECRET || '').trim(),
+    // Hardcover usernames that may sign in. Empty = the first account to sign in owns the app.
+    allowedUsers: nameList(process.env.HARDCOVER_ALLOWED_USERS),
+    scopes: (process.env.HARDCOVER_SCOPES || 'read:me:content read:library read:lists').trim(),
+    // Only changed to point the app at the practice server in dev/fake-hardcover.js.
+    apiUrl: trimSlash(process.env.HARDCOVER_API_URL) || 'https://api.hardcover.app',
+    webUrl: trimSlash(process.env.HARDCOVER_WEB_URL) || 'https://hardcover.app',
+  },
 
   dbPath: path.join(dataDir, 'library.db'),
   buildPath: path.join(dataDir, 'library.build.db'),

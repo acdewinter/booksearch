@@ -4,7 +4,11 @@ import http from 'node:http';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import zlib from 'node:zlib';
+import { Auth, createAuthRoutes, hardcoverIdOf } from './auth.js';
 import { config } from './config.js';
+import { HardcoverClient } from './hardcover/client.js';
+import { createHardcoverRoutes } from './hardcover/routes.js';
+import { Hardcover } from './hardcover/service.js';
 import { IrcManager } from './irc/manager.js';
 import { createIrcRoutes } from './irc/routes.js';
 import { Library } from './library.js';
@@ -18,6 +22,18 @@ const irc = new IrcManager({
   dccPorts: config.dccPorts,
   dccPublicIp: config.dccPublicIp,
   version: config.version,
+});
+const hardcover = new Hardcover({
+  client: new HardcoverClient({ ...config.hardcover, userAgent: `Shelfmark/${config.version || 'dev'}` }),
+  dataDir: config.dataDir,
+});
+const auth = new Auth({
+  dataDir: config.dataDir,
+  password: config.password,
+  username: config.username,
+  hardcover: hardcover.configured,
+  allowedUsers: config.hardcover.allowedUsers,
+  appUrl: config.appUrl,
 });
 
 // State of the most recent change to the lists.
@@ -104,6 +120,8 @@ function boot() {
   fs.mkdirSync(config.dataDir, { recursive: true });
   for (const stale of [config.uploadPath, config.buildPath]) fs.rmSync(stale, { force: true });
   store.load();
+  auth.load();
+  hardcover.load();
 
   const opened = library.open();
   if (store.lists.length === 0) {
@@ -239,26 +257,13 @@ function sameOrigin(req) {
   return originHost === (req.headers['x-forwarded-host'] || req.headers.host);
 }
 
-const ircRoutes = createIrcRoutes(irc, { sendJson, sendError, sameOrigin });
-
-function safeEqual(a, b) {
-  const x = crypto.createHash('sha256').update(a).digest();
-  const y = crypto.createHash('sha256').update(b).digest();
-  return crypto.timingSafeEqual(x, y);
-}
-
-function isAuthorized(req) {
-  if (!config.password) return true;
-  const header = req.headers.authorization || '';
-  if (!header.startsWith('Basic ')) return false;
-  const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
-  const colon = decoded.indexOf(':');
-  if (colon < 0) return false;
-  const user = decoded.slice(0, colon);
-  const pass = decoded.slice(colon + 1);
-  const userOk = config.username ? safeEqual(user, config.username) : true;
-  return safeEqual(pass, config.password) && userOk;
-}
+const http_ = { sendJson, sendError, sameOrigin };
+const ircRoutes = createIrcRoutes(irc, http_);
+const hardcoverRoutes = createHardcoverRoutes({ auth, hardcover, library, appUrl: config.appUrl }, http_);
+const authRoutes = createAuthRoutes(auth, http_, (session) => {
+  const userId = hardcoverIdOf(session.account);
+  return { hardcover: userId ? hardcover.describe(userId) : null };
+});
 
 function statusPayload() {
   return {
@@ -371,7 +376,7 @@ function handleApply(req, res) {
 
 // ------------------------------------------------------------------ routing
 
-function handleApi(req, res, url) {
+function handleApi(req, res, url, session) {
   const p = url.pathname;
   const q = url.searchParams;
 
@@ -385,6 +390,7 @@ function handleApi(req, res, url) {
     return handleApply(req, res);
   }
   if (ircRoutes.handle(req, res, url)) return undefined;
+  if (hardcoverRoutes.handle(req, res, url, session)) return undefined;
   if (req.method !== 'GET') return sendError(req, res, 405, 'Method not allowed.');
 
   if (p === '/api/search' || p === '/api/browse' || p === '/api/files') {
@@ -428,19 +434,18 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (!isAuthorized(req)) {
-    req.resume();
-    res.writeHead(401, {
-      'WWW-Authenticate': 'Basic realm="Shelfmark", charset="UTF-8"',
-      'Content-Type': 'text/plain; charset=utf-8',
-    });
-    res.end('Sign in to continue.');
-    return;
-  }
-
   try {
+    // The page itself and signing in are open to everyone; everything it shows is not.
+    const session = auth.session(req);
+    if (authRoutes.handle(req, res, url, session)) return;
+    if (hardcoverRoutes.handlePublic(req, res, url, session)) return;
     if (url.pathname.startsWith('/api/')) {
-      handleApi(req, res, url);
+      if (!session) {
+        req.resume();
+        sendJson(req, res, 401, { error: 'Sign in to continue.', signIn: true });
+        return;
+      }
+      handleApi(req, res, url, session);
       return;
     }
     if ((req.method === 'GET' || req.method === 'HEAD') && serveStatic(req, res, url.pathname)) return;
@@ -461,14 +466,28 @@ irc.start();
 server.listen(config.port, config.host, () => {
   console.log(`Shelfmark is running on http://localhost:${config.port}`);
   console.log(`Downloads are saved to ${config.downloadDir}`);
-  if (!config.password) {
-    console.log('No APP_PASSWORD set: anyone who can reach this address can use the app, including the IRC connection.');
+  if (hardcover.configured) {
+    const who = config.hardcover.allowedUsers.length
+      ? `only ${config.hardcover.allowedUsers.map((u) => `@${u}`).join(', ')}`
+      : auth.owner
+        ? `only @${auth.owner.username}, who owns this app`
+        : config.password
+          ? 'the first account to connect after signing in with the app password will own this app'
+          : 'the first account to sign in will own this app';
+    console.log(`Sign-in with Hardcover is on (${who}).`);
+    console.log(`Redirect URI to register at hardcover.app: ${config.appUrl || `http://localhost:${config.port}`}/oauth/callback`);
+  } else if (config.hardcover.clientId || config.hardcover.clientSecret) {
+    console.log('Hardcover needs both HARDCOVER_CLIENT_ID and HARDCOVER_CLIENT_SECRET: it is off until both are set.');
+  }
+  if (!auth.required) {
+    console.log('No sign-in is set up: anyone who can reach this address can use the app, including the IRC connection.');
   }
 });
 
 function shutdown() {
   irc.shutdown();
   ircRoutes.close();
+  auth.flush();
   server.close(() => {
     library.close();
     process.exit(0);

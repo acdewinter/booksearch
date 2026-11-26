@@ -10,6 +10,11 @@ services:
       # Leave empty for no sign-in, or set a password to protect the whole app.
       APP_PASSWORD: ${APP_PASSWORD:-}
       APP_USERNAME: ${APP_USERNAME:-}
+      # Sign in with Hardcover and show your library; see .env.example.
+      HARDCOVER_CLIENT_ID: ${HARDCOVER_CLIENT_ID:-}
+      HARDCOVER_CLIENT_SECRET: ${HARDCOVER_CLIENT_SECRET:-}
+      HARDCOVER_ALLOWED_USERS: ${HARDCOVER_ALLOWED_USERS:-}
+      APP_URL: ${APP_URL:-}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-512}
       # Only for senders behind a firewall; also publish the same ports below.
       DCC_PORTS: ${DCC_PORTS:-}

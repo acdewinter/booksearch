@@ -18,6 +18,9 @@
     <symbol id="i-check" viewBox="0 0 20 20"><path d="m4.5 10.5 3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-close" viewBox="0 0 20 20"><path d="m5.5 5.5 9 9m0-9-9 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
     <symbol id="i-download" viewBox="0 0 20 20"><path d="M10 3.5V13m0 0-3.5-3.5M10 13l3.5-3.5M3.5 12.5v2A1.5 1.5 0 0 0 5 16h10a1.5 1.5 0 0 0 1.5-1.5v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-user" viewBox="0 0 20 20"><circle cx="10" cy="7" r="3.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3.75 16.5c.7-2.9 3.2-4.5 6.25-4.5s5.55 1.6 6.25 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-sync" viewBox="0 0 20 20"><path d="M16 10a6 6 0 0 1-10.6 3.9M4 10a6 6 0 0 1 10.6-3.9M14.9 3v3.4h-3.4M5.1 17v-3.4h3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-out" viewBox="0 0 20 20"><path d="M8 4.5h6.5v6.5M14.5 4.5 6 13M5 8v7h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-upload" viewBox="0 0 20 20"><path d="M10 13V3.5m0 0L6.5 7M10 3.5 13.5 7M3.5 12.5v2A1.5 1.5 0 0 0 5 16h10a1.5 1.5 0 0 0 1.5-1.5v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   </svg>
 
@@ -26,8 +29,9 @@
   <header class="top">
     <div class="wrap top-row">
       <a class="wordmark" href="/" id="home-link"><span class="wordmark-bang" aria-hidden="true">!</span>Shelfmark</a>
-      <nav class="views" aria-label="Sections">
+      <nav class="views" id="views" aria-label="Sections" hidden>
         <button type="button" id="nav-search" aria-current="page">Search</button>
+        <button type="button" id="nav-library" hidden>Library</button>
         <button type="button" id="nav-downloads">
           <span class="dot is-off" id="nav-dot" hidden></span>
           <span>Downloads</span>
@@ -37,6 +41,10 @@
       <button type="button" class="list-button" id="open-update" hidden>
         <span id="list-summary"></span>
         <span class="list-button-action"><svg class="icon"><use href="#i-upload"/></svg>Lists</span>
+      </button>
+      <button type="button" class="account-button" id="account-button" hidden>
+        <svg class="icon" aria-hidden="true"><use href="#i-user"/></svg>
+        <span id="account-name"></span>
       </button>
     </div>
   </header>
@@ -107,6 +115,16 @@
       </button>
     </form>
     <div class="dialog-body" id="irc-body"></div>
+  </dialog>
+
+  <dialog class="dialog is-small" id="account-dialog" aria-labelledby="account-title">
+    <form method="dialog" class="dialog-head">
+      <h2 id="account-title">Account</h2>
+      <button class="icon-button" aria-label="Close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+    </form>
+    <div class="dialog-body" id="account-body"></div>
   </dialog>
 
   <dialog class="dialog is-small" id="confirm-dialog" aria-labelledby="confirm-title">

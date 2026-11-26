@@ -78,6 +78,12 @@ DOWNLOAD_DIR=$DOWNLOAD_DIR
 APP_PASSWORD=
 APP_USERNAME=
 
+# Sign in with Hardcover and see your library (see "Signing in" in the README).
+#HARDCOVER_CLIENT_ID=
+#HARDCOVER_CLIENT_SECRET=
+#HARDCOVER_ALLOWED_USERS=
+#APP_URL=https://books.example.com
+
 # Only for senders behind a firewall (reverse DCC). Forward these ports from
 # your router to this machine, and fill in your public IP address if the app
 # cannot work it out by itself.

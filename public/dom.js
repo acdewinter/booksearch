@@ -72,12 +72,37 @@ export async function postJson(path, body = {}) {
     // not JSON
   }
   if (!res.ok) {
+    if (res.status === 401 && data?.signIn) signedOut();
     const err = new Error(data?.error || `The server answered with an error (${res.status}).`);
     err.status = res.status;
     err.fields = data?.fields || null;
     throw err;
   }
   return data;
+}
+
+/** GET JSON from the app's own API. Errors carry the server's message and the status. */
+export async function getJson(path, signal) {
+  const res = await fetch(path, { signal, headers: { Accept: 'application/json' } });
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {
+    // not JSON
+  }
+  if (!res.ok) {
+    if (res.status === 401 && body?.signIn) signedOut();
+    const err = new Error(body?.error || `The server answered with an error (${res.status}).`);
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
+}
+
+/** The session ended (it ran out, or was closed elsewhere): the page has to start over. */
+function signedOut() {
+  window.dispatchEvent(new Event('shelfmark:signed-out'));
 }
 
 /** A yes/no question in the app's own dialog. Resolves true when confirmed. */
