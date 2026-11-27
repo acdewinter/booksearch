@@ -671,6 +671,8 @@ export function openSettings() {
   timeout.value = String(s.requestTimeoutMin ?? 20);
   const hold = check('holdForBot', 'Hold requests while the bot is not in the channel', s.holdForBot !== false);
   const allowPrivate = check('allowPrivate', 'Allow senders on a private network', s.allowPrivate, 'Addresses such as 192.168.x.x. Leave off unless the sender is on your own network.');
+  const onlyList = check('onlyListSenders', 'Only take files from senders in your lists', s.onlyListSenders !== false,
+    'A sender is in your lists when their commands are: !TrainFiles means TrainFiles. A file from anyone else is refused without asking you, unless you asked them for it or their nickname is listed below.');
 
   const connected = irc.conn && irc.conn.status !== 'offline';
   const formError = h('p', { class: 'callout is-error', role: 'alert', hidden: true });
@@ -692,7 +694,8 @@ export function openSettings() {
       accountPassword.el,
       serverPassword.el,
       tlsVerify.el,
-      field('Also accept files from', trusted, 'Files you asked for are accepted from the bot you asked. Anyone else has to be accepted by hand, unless their nickname is listed here.'),
+      onlyList.el,
+      field('Also accept files from', trusted, 'Files you asked for are accepted from the bot you asked. Files from these nicknames are accepted too, without asking.'),
       h('div', { class: 'field-row' },
         field('Requests at a time', maxActive),
         field('Seconds between requests', sendInterval),
@@ -737,6 +740,7 @@ export function openSettings() {
         requestTimeoutMin: timeout.value,
         holdForBot: hold.box.checked,
         allowPrivate: allowPrivate.box.checked,
+        onlyListSenders: onlyList.box.checked,
       });
       if (!connected) await ircPost('connect');
       dialog.close();

@@ -23,6 +23,7 @@ test('build counts files and folders', () => {
   assert.equal(stats.folders, 6);
   assert.equal(stats.skippedLines, 0);
   assert.equal(library.info.sourceName, 'sample-list.txt');
+  assert.deepEqual(library.info.bots, ['TrainFiles'], 'the senders the commands name');
 });
 
 test('search finds by author and title, grouped by folder', () => {

@@ -45,6 +45,7 @@ test('several lists are searched together, each under its own top folder', () =>
   ], dbPath, { key: 'k1' });
 
   assert.equal(stats.files, 18);
+  assert.deepEqual(stats.bots, ['Bsk', 'TrainFiles'], 'the senders of both lists');
   assert.deepEqual(stats.lists.map((l) => [l.id, l.name, l.folder, l.files, l.mainFiles]), [
     ['a', 'TrainFiles audio', '/TrainFiles audio', 15, 13],
     ['b', 'Bsk ebooks', '/Bsk ebooks', 3, 2],

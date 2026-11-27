@@ -17,7 +17,11 @@ import {
 // 2: ebooks became a kind of their own, and lists in the "!Bot File.ext" layout
 //    (with their folder headings) are read properly.
 // 3: several lists can be combined; the database records which ones it holds.
-export const SCHEMA_VERSION = 3;
+// 4: the database records which senders its commands name ("!TrainFiles ..." -> TrainFiles),
+//    so that files are only taken from them.
+export const SCHEMA_VERSION = 4;
+
+const MAX_BOTS = 500;
 
 const SCHEMA = `
   CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
@@ -83,7 +87,7 @@ export function listFolderName(name) {
  *        several, each list gets a top folder of its own, named after the list.
  * @param {string} outPath     database file to create (replaced if present)
  * @param {{sourceName?: string, key?: string, onProgress?: (p: {phase: string, progress: number}) => void}} [options]
- * @returns {{files: number, mainFiles: number, folders: number, bytes: number, skippedLines: number, lists: object[]}}
+ * @returns {{files: number, mainFiles: number, folders: number, bytes: number, skippedLines: number, bots: string[], lists: object[]}}
  */
 export function buildDatabase(sources, outPath, options = {}) {
   const { onProgress = () => {} } = options;
@@ -205,6 +209,18 @@ export function buildDatabase(sources, outPath, options = {}) {
     );
     const insertFileFts = db.prepare('INSERT INTO files_fts (rowid, name, path) VALUES (?, ?, ?)');
 
+    // The senders the commands are addressed to. A list names very few, so the
+    // start of the previous command usually answers it.
+    const bots = new Map(); // lower case -> as written
+    let lastPrefix = '\n';
+    const noteBot = (command) => {
+      if (command.startsWith(lastPrefix)) return;
+      const m = /^!([^\s!@]+)/.exec(command);
+      if (!m) return;
+      lastPrefix = `${m[0]} `;
+      if (bots.size < MAX_BOTS && !bots.has(m[1].toLowerCase())) bots.set(m[1].toLowerCase(), m[1]);
+    };
+
     doneSize = 0;
     for (const list of lists) {
       const base = doneSize;
@@ -221,6 +237,7 @@ export function buildDatabase(sources, outPath, options = {}) {
             return;
           }
           files += 1;
+          noteBot(f.command);
           insertFile.run(files, current.id, f.command, f.namePos, f.ext, f.kind, f.sizeBytes, f.sizeLabel);
           insertFileFts.run(files, f.name, current.path);
           if (current.directFiles === 0) list.folders += 1;
@@ -282,6 +299,7 @@ export function buildDatabase(sources, outPath, options = {}) {
       folders: folders.filter((f) => f.directFiles > 0).length,
       bytes: root.totalBytes,
       skippedLines: lists.reduce((sum, l) => sum + l.skippedLines, 0),
+      bots: [...bots.values()].sort((a, b) => a.localeCompare(b)),
       lists: lists.map((l) => ({
         id: l.id,
         name: l.name,

@@ -178,8 +178,9 @@ test('a different file with the same name is kept next to the old one', async (t
   assert.equal(fs.readFileSync(path.join(downloadDir, NAME), 'utf8'), 'older, different file');
 });
 
-test('files from strangers wait for a decision, and never leave the download folder', async (t) => {
-  const { fake, manager, downloadDir, dir, online } = await setup(t);
+test('a file nobody asked for waits for a decision, and never leaves the download folder', async (t) => {
+  // "stranger" has commands in the loaded lists, but was not asked for anything.
+  const { fake, manager, downloadDir, dir, online } = await setup(t, { manager: { listBots: () => ['TrainFiles', 'Stranger'] } });
   manager.connect();
   await online();
 
@@ -198,6 +199,55 @@ test('files from strangers wait for a decision, and never leave the download fol
   const second = await until(() => manager.snapshot().items.find((i) => i.status === 'offered'), 'the second offer');
   manager.act(second.id, 'cancel');
   assert.equal(manager.snapshot().items.some((i) => i.id === second.id), false);
+});
+
+test('a file from someone who is not in the lists is refused', async (t) => {
+  const { fake, manager, downloadDir, online, done, request } = await setup(t, { manager: { listBots: () => ['TrainFiles'] } });
+  manager.connect();
+  await online();
+  const refusals = () => manager.snapshot().log.filter((l) => /Refused a file from stranger/.test(l.text));
+
+  fake.offer('stranger', 'surprise.exe', 5000);
+  await until(() => refusals().length === 1, 'the refusal to be noted');
+  assert.match(refusals()[0].text, /surprise\.exe.*not a sender in your lists/);
+  assert.deepEqual(manager.snapshot().items, [], 'nothing to accept by mistake');
+
+  // Offering again and again does not fill the messages.
+  fake.offer('stranger', 'another.exe', 5000);
+  fake.offer('stranger', 'third.exe', 5000);
+  fake.say('stranger', 'you', 'marker');
+  await until(() => manager.snapshot().log.some((l) => l.text === 'marker'), 'the later message');
+  assert.equal(refusals().length, 1);
+  assert.deepEqual(manager.snapshot().items, []);
+  assert.deepEqual(fs.readdirSync(downloadDir), []);
+
+  // What was asked for still arrives.
+  request([COMMAND]);
+  await done();
+  assert.deepEqual(fs.readdirSync(downloadDir), [NAME]);
+});
+
+test('with no list loaded, only what was asked for gets in', async (t) => {
+  const { fake, manager, online, done, request } = await setup(t);
+  manager.connect();
+  await online();
+  fake.offer('TrainFiles', 'unasked.zip', 5000);
+  fake.say('stranger', 'you', 'marker');
+  await until(() => manager.snapshot().log.some((l) => l.text === 'marker'), 'the later message');
+  assert.deepEqual(manager.snapshot().items, []);
+
+  request([COMMAND]);
+  assert.equal((await done()).name, NAME);
+});
+
+test('the protection can be turned off, and then strangers wait for a decision again', async (t) => {
+  const { fake, manager, online } = await setup(t, { settings: { onlyListSenders: false }, manager: { listBots: () => ['TrainFiles'] } });
+  manager.connect();
+  await online();
+  assert.equal(manager.snapshot().settings.onlyListSenders, false);
+  fake.offer('stranger', 'maybe.txt', 5000);
+  const offered = await until(() => manager.snapshot().items.find((i) => i.status === 'offered'), 'the offer');
+  assert.equal(offered.bot, 'stranger');
 });
 
 test('trusted nicknames are accepted without asking', async (t) => {

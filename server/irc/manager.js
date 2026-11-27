@@ -37,6 +37,7 @@ const DEFAULT_SETTINGS = {
   requestTimeoutMin: 20,
   holdForBot: true,
   allowPrivate: false,
+  onlyListSenders: true,
 };
 const SECRET_FIELDS = ['serverPassword', 'accountPassword'];
 // Changing any of these means the connection has to be made again.
@@ -53,6 +54,7 @@ const RETRY_DELAYS_S = [5, 15, 30, 60, 120, 300];
 const MAX_ITEMS = 300;
 const MAX_QUEUED = 200;
 const MAX_PENDING_OFFERS = 10;
+const REFUSAL_NOTE_MS = 60_000;      // how often one nickname's refused offers are mentioned
 const LOG_ME = 400;
 const LOG_CHANNEL = 300;
 
@@ -103,6 +105,7 @@ export class IrcManager extends EventEmitter {
    * @param {string} o.dccPublicIp this machine's address as seen from the internet
    * @param {string} o.version
    * @param {number} [o.resumeTimeoutMs] how long to wait for a sender to agree to resume
+   * @param {() => string[]} [o.listBots] the senders named by the loaded lists ("!TrainFiles ..." -> TrainFiles)
    */
   constructor(o) {
     super();
@@ -113,6 +116,8 @@ export class IrcManager extends EventEmitter {
     this.dccPublicIp = o.dccPublicIp || '';
     this.version = o.version || '';
     this.resumeTimeoutMs = o.resumeTimeoutMs || 15_000;
+    this.listBots = o.listBots || (() => []);
+    this.refused = new Map(); // nickname -> when its refused offer was last mentioned
 
     this.settings = { ...DEFAULT_SETTINGS };
     this.items = new Map();   // id -> item, in the order they were queued
@@ -342,7 +347,7 @@ export class IrcManager extends EventEmitter {
       if (!Number.isInteger(port) || port < 1 || port > 65535) errors.port = 'The port is a number between 1 and 65535.';
       else out.port = port;
     }
-    for (const key of ['tls', 'tlsVerify', 'holdForBot', 'allowPrivate']) {
+    for (const key of ['tls', 'tlsVerify', 'holdForBot', 'allowPrivate', 'onlyListSenders']) {
       if (key in input) out[key] = Boolean(input[key]);
     }
     if ('nick' in input) {
@@ -914,6 +919,19 @@ export class IrcManager extends EventEmitter {
       }
     }
     const trusted = knownBot || this.settings.trustedNicks.some((n) => lower(n) === fromKey);
+
+    // Anyone on the server can offer a file. Unless this one was asked for,
+    // it is only considered from a sender the lists name; the rest never
+    // reach the queue, so there is nothing to accept by mistake.
+    if (!item && !trusted && this.settings.onlyListSenders && !this.listBots().some((n) => lower(n) === fromKey)) {
+      const last = this.refused.get(fromKey) || 0;
+      if (now - last > REFUSAL_NOTE_MS) {
+        if (this.refused.size > 200) this.refused.clear();
+        this.refused.set(fromKey, now);
+        this.#log('problem', `Refused a file from ${from} (${name}): ${from} is not a sender in your lists. If you expected it, add the nickname under Settings, More options, "Also accept files from".`);
+      }
+      return;
+    }
 
     if (!item) {
       let pending = 0;

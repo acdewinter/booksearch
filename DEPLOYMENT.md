@@ -213,8 +213,21 @@ nickname), a channel key, and how patiently requests are sent.
 - A file is accepted automatically when it comes from the bot you asked. The
   bot's nickname is taken from the command: `!TrainFiles …` means the bot is
   called `TrainFiles`.
-- A file from anyone else shows up under **Downloads** with **Accept** and
-  **Decline**, unless you listed that nickname under **Also accept files from**.
+- A file you did not ask for, from a sender that is in your lists (any
+  nickname your loaded lists have commands for), shows up under **Downloads**
+  with **Accept** and **Decline**. Nothing is fetched until you accept.
+- A file from anyone else is refused: it never reaches the queue, and a line
+  under **Messages** says who tried. Anyone on the IRC server can offer you a
+  file, so this is what keeps strangers out while the app stays connected.
+- Two ways to let someone else through, both under **Settings → More
+  options**: list their nickname under **Also accept files from** (their
+  files are then accepted without asking), or turn off **Only take files from
+  senders in your lists** (everyone is back to **Accept** and **Decline**).
+  You need one of them for a bot whose list you do not have yet, such as when
+  asking a new bot for its list.
+- A nickname is all IRC gives to go by: whoever holds a bot's nickname
+  counts as that bot. Networks where the bots register their nicknames rule
+  that out; the app cannot check it by itself.
 - Files are only ever written inside the download folder. A file that is
   still arriving has `.part` at the end of its name.
 

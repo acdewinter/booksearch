@@ -89,8 +89,10 @@ channel are all it needs. Once that is saved:
   to the channel there too, or use `/msg nickname text`.
 - Requests go out one at a time by default, and wait while the bot is not in
   the channel. Both can be changed under **Settings → More options**.
-- A file from the bot you asked is accepted by itself. A file from anyone
-  else waits for you to press **Accept**.
+- A file from the bot you asked is accepted by itself. A file you did not
+  ask for waits for you to press **Accept** if it comes from a sender in your
+  lists (`!TrainFiles …` makes `TrainFiles` one), and is refused if it comes
+  from anyone else. See *Which files are accepted* in DEPLOYMENT.md.
 - An interrupted download keeps its partial file (`name.part`) and continues
   from there when you press **Try again**.
 - The app stays connected, and reconnects after a restart, until you press

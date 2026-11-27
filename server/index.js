@@ -22,6 +22,8 @@ const irc = new IrcManager({
   dccPorts: config.dccPorts,
   dccPublicIp: config.dccPublicIp,
   version: config.version,
+  // The senders named by the loaded lists: files are only taken from them.
+  listBots: () => library.info?.bots || [],
 });
 const hardcover = new Hardcover({
   client: new HardcoverClient({ ...config.hardcover, userAgent: `Shelfmark/${config.version || 'dev'}` }),
