@@ -13,6 +13,8 @@ export const STATUS = {
   ignored: 'Ignored',
 };
 const SHELVES = ['want', 'reading', 'read', 'paused', 'dnf', 'ignored'];
+// Not a status on Hardcover: the books that have a file in the collection.
+const HAVE = 'have';
 
 const SORTS = [
   ['added', 'Recently added'],
@@ -31,7 +33,7 @@ const FRESH_MS = 60 * 1000;
 const PREFS_KEY = 'shelfmark.library';
 
 // Kept while the page is open, so coming back from a search lands where you left.
-const memory = { data: null, loadedAt: 0, filter: '', shown: PAGE, scrollY: 0, restore: false };
+const memory = { data: null, loadedAt: 0, filter: '', shown: PAGE, scrollY: 0, restore: false, owned: {} };
 const prefs = { sort: 'added', layout: 'grid' };
 try {
   Object.assign(prefs, JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'));
@@ -78,7 +80,7 @@ export function day(iso) {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function ago(iso) {
+export function ago(iso) {
   const ms = Date.now() - Date.parse(iso);
   if (!Number.isFinite(ms)) return '';
   const minutes = Math.round(ms / 60000);
@@ -94,21 +96,24 @@ const stars = (value) => `★ ${Number(value).toLocaleString(undefined, { maximu
 
 // ------------------------------------------------------------- pieces
 
-/** A book's cover, or a block with its title when there is none. */
-export function coverEl(book) {
+/**
+ * A book's cover, or a block with its title when there is none.
+ * `src` is where the image is, for covers that are not the Hardcover library's; '' for none.
+ */
+export function coverEl(book, src) {
   const box = h('span', { class: 'book-cover' });
   const blank = () => {
     box.classList.add('is-blank');
     if (book.color) box.style.backgroundColor = book.color;
     box.replaceChildren(h('span', { class: 'book-cover-title' }, book.title));
   };
-  if (!book.cover) {
+  if (src === undefined ? !book.cover : !src) {
     blank();
     return box;
   }
   if (book.color) box.style.backgroundColor = book.color;
   const img = h('img', {
-    src: `/api/hardcover/cover?book=${book.id}&v=${book.cover}`,
+    src: src || `/api/hardcover/cover?book=${book.id}&v=${book.cover}`,
     alt: '',
     loading: 'lazy',
     decoding: 'async',
@@ -144,6 +149,7 @@ function bookItem(book) {
     ),
     h('span', { class: 'book-tags' },
       statusEl(book.status),
+      memory.owned[book.id] ? h('span', { class: 'status is-have', title: `In your collection: ${memory.owned[book.id].formats.join(', ')}` }, 'Have it') : null,
       book.myRating ? h('span', { class: 'book-stars', title: `You rated it ${book.myRating} out of 5` }, stars(book.myRating)) : null,
     ),
     h('span', { class: 'book-extra' }, extra),
@@ -283,7 +289,8 @@ export function mountLibrary(container, o) {
     const counts = Object.fromEntries(SHELVES.map((s) => [s, 0]));
     for (const book of pool) if (book.status) counts[book.status] += 1;
     const inLibrary = inList ? pool.length : pool.filter((b) => b.status && b.status !== 'ignored').length;
-    if (state.shelf && !counts[state.shelf]) state.shelf = '';
+    const have = pool.filter((b) => memory.owned[b.id]).length;
+    if (state.shelf && !(state.shelf === HAVE ? have : counts[state.shelf])) state.shelf = '';
 
     const tab = (value, label, total) => h('button', {
       type: 'button', class: 'shelf-tab', 'aria-pressed': String(state.shelf === value),
@@ -292,6 +299,7 @@ export function mountLibrary(container, o) {
     setChildren(shelves,
       tab('', 'All', inLibrary),
       SHELVES.filter((s) => counts[s]).map((s) => tab(s, STATUS[s], counts[s])),
+      have ? tab(HAVE, 'In my collection', have) : null,
     );
 
     listSelect.hidden = lists.length === 0;
@@ -321,7 +329,9 @@ export function mountLibrary(container, o) {
 
     matching = books.filter((book) => {
       if (list ? !order.has(book.id) : !book.status) return false;
-      if (state.shelf ? book.status !== state.shelf : (!list && book.status === 'ignored')) return false;
+      if (state.shelf === HAVE) {
+        if (!memory.owned[book.id]) return false;
+      } else if (state.shelf ? book.status !== state.shelf : (!list && book.status === 'ignored')) return false;
       if (!terms.length) return true;
       const hay = fold(`${book.title} ${book.subtitle || ''} ${book.authors.join(' ')} ${book.series?.name || ''} ${(book.genres || []).join(' ')}`);
       return terms.every((t) => hay.includes(t));
@@ -333,7 +343,7 @@ export function mountLibrary(container, o) {
     grid.className = `books${prefs.layout === 'rows' ? ' is-rows' : ''}`;
     grid.replaceChildren(...matching.slice(0, memory.shown).map(bookItem));
 
-    const where = list ? `in “${list.name}”` : state.shelf ? `marked ${STATUS[state.shelf].toLowerCase()}` : 'in your library';
+    const where = list ? `in “${list.name}”` : state.shelf === HAVE ? 'in your collection' : state.shelf ? `marked ${STATUS[state.shelf].toLowerCase()}` : 'in your library';
     count.replaceChildren();
     if (matching.length) {
       count.append(h('strong', null, plural(matching.length, 'book')), ` ${where}${terms.length ? ' match the filter' : ''}. Pick one to look for it in the lists.`);
@@ -429,9 +439,14 @@ export function mountLibrary(container, o) {
   async function load({ quiet = false } = {}) {
     if (!quiet && !memory.data) message('Loading your library', 'One moment.');
     try {
-      const data = await getJson('/api/hardcover/library');
+      // Which of these books have a file is asked alongside; the page works without the answer.
+      const [data, have] = await Promise.all([
+        getJson('/api/hardcover/library'),
+        getJson('/api/collection/owned').catch(() => null),
+      ]);
       if (!state.alive) return;
       memory.data = data;
+      if (have) memory.owned = have.owned;
       memory.loadedAt = Date.now();
       render({ keep: quiet });
       watchSync();
@@ -520,5 +535,10 @@ export function unmountLibrary() {
 /** Forget what was loaded, such as after signing out or disconnecting. */
 export function forgetLibrary() {
   memory.data = null;
+  memory.loadedAt = 0;
+}
+
+/** The collection changed: the "Have it" marks are fetched again the next time the page is shown. */
+export function staleLibrary() {
   memory.loadedAt = 0;
 }

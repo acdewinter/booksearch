@@ -26,9 +26,10 @@ function safeNext(value) {
  * @param {import('./service.js').Hardcover} o.hardcover
  * @param {import('../library.js').Library} o.library the loaded lists, to look books up in
  * @param {string} o.appUrl the app's public address, if it was configured
+ * @param {() => object} [o.owned] the Hardcover books that are in the collection: id -> { id, formats }
  * @param {object} http helpers from the web server: sendJson, sendError, sameOrigin
  */
-export function createHardcoverRoutes({ auth, hardcover, library, appUrl }, { sendJson, sendError, sameOrigin }) {
+export function createHardcoverRoutes({ auth, hardcover, library, appUrl, owned = () => ({}) }, { sendJson, sendError, sameOrigin }) {
   const { client } = hardcover;
   const pending = new Map(); // state -> { verifier, redirectUri, next, binder, at }
 
@@ -49,7 +50,10 @@ export function createHardcoverRoutes({ auth, hardcover, library, appUrl }, { se
 
   // --------------------------------------------------------------- signing in
 
-  function start(req, res, url) {
+  /** The scope that lets the app look up any book on Hardcover, for tying files to titles. */
+  const CATALOG_SCOPE = 'read:catalog:search';
+
+  function start(req, res, url, session) {
     if (!hardcover.configured) return redirect(res, '/?signin=unavailable');
     const now = Date.now();
     for (const [state, entry] of pending) {
@@ -61,10 +65,14 @@ export function createHardcoverRoutes({ auth, hardcover, library, appUrl }, { se
     const state = randomToken(24);
     const binder = randomToken(24);
     const uri = redirectUri(req);
-    pending.set(state, { verifier, redirectUri: uri, next: safeNext(url.searchParams.get('next')), binder: sha(binder), at: now });
+    // Asked for with "?catalog=1", and kept by anyone who already has it.
+    const signedInAs = hardcoverIdOf(session?.account);
+    const catalog = url.searchParams.get('catalog') === '1' || Boolean(signedInAs && hardcover.canSearch(signedInAs));
+    const scope = catalog && !/(^|\s)read:catalog(:search)?(\s|$)/.test(client.scopes) ? `${client.scopes} ${CATALOG_SCOPE}` : client.scopes;
+    pending.set(state, { verifier, redirectUri: uri, next: safeNext(url.searchParams.get('next')), binder: sha(binder), at: now, catalog });
     // Ties the answer to the browser that asked, so a sign-in cannot be finished in someone else's.
     setCookie(res, OAUTH_COOKIE, binder, { maxAgeSec: PENDING_MS / 1000, path: '/oauth', secure: auth.isSecure(req) });
-    return redirect(res, client.authorizeUrl({ state, challenge, redirectUri: uri }));
+    return redirect(res, client.authorizeUrl({ state, challenge, redirectUri: uri, scope }));
   }
 
   async function callback(req, res, url, session) {
@@ -76,7 +84,11 @@ export function createHardcoverRoutes({ auth, hardcover, library, appUrl }, { se
     setCookie(res, OAUTH_COOKIE, '', { maxAgeSec: 0, path: '/oauth', secure: auth.isSecure(req) });
     const fail = (reason) => redirect(res, `/?signin=${reason}`);
 
-    if (q.get('error')) return fail(q.get('error') === 'access_denied' ? 'denied' : 'failed');
+    if (q.get('error')) {
+      if (q.get('error') === 'access_denied') return fail('denied');
+      // The app on Hardcover has to allow the extra scope before it can be asked for.
+      return fail(q.get('error') === 'invalid_scope' && entry?.catalog ? 'catalog-scope' : 'failed');
+    }
     const code = q.get('code');
     if (!entry || Date.now() - entry.at > PENDING_MS || !binder || sha(binder) !== entry.binder || !code) return fail('expired');
     // Only an answer from Hardcover's own server is taken further (RFC 9207).
@@ -119,7 +131,7 @@ export function createHardcoverRoutes({ auth, hardcover, library, appUrl }, { se
   function handlePublic(req, res, url, session) {
     if (req.method !== 'GET') return false;
     if (url.pathname === '/auth/hardcover') {
-      start(req, res, url);
+      start(req, res, url, session);
       return true;
     }
     if (url.pathname === '/oauth/callback') {
@@ -182,6 +194,8 @@ export function createHardcoverRoutes({ auth, hardcover, library, appUrl }, { se
     const picked = pickQueries(queries, (q) => library.count({ q, all }));
     return sendJson(req, res, 200, {
       listLoaded: library.ready,
+      // Whether a file of this book is in the collection already, and in which formats.
+      owned: owned()[bookId] || undefined,
       book: {
         ...card(book, entry),
         description: book.description || undefined,

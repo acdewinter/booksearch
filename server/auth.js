@@ -6,6 +6,12 @@
 //
 //   account "local"    signed in with the password (or no sign-in is set up)
 //   account "hc:123"   signed in as Hardcover user 123
+//
+// The reader app on a phone cannot sign in that way. It is paired instead:
+// someone who is signed in asks for a short code, the app trades the code for
+// a token of its own, and sends that token with every request. A paired
+// device acts for the account that made the code, but only reaches the
+// collection (see the web server), and can be removed again at any time.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -19,6 +25,10 @@ const MAX_BODY = 64 * 1024;
 
 const LOGIN_TRIES = 8;
 const LOGIN_WINDOW_MS = 10 * 60 * 1000;
+
+const PAIR_CODE_MS = 10 * 60 * 1000;
+const PAIR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O or 1/I to mix up
+const MAX_DEVICES = 50;
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 export const randomToken = (bytes = 32) => crypto.randomBytes(bytes).toString('base64url');
@@ -114,6 +124,7 @@ export class Auth {
    */
   constructor(o) {
     this.sessionsPath = path.join(o.dataDir, 'sessions.json');
+    this.devicesPath = path.join(o.dataDir, 'devices.json');
     this.statePath = path.join(o.dataDir, 'auth.json');
     this.password = o.password || '';
     this.username = o.username || '';
@@ -124,6 +135,9 @@ export class Auth {
     this.owner = null;         // { id, username }: the Hardcover account that owns this app
     this.tries = new Map();    // address -> { count, resetAt }
     this.savedAt = 0;
+    this.devices = new Map();  // hash of the device's token -> { id, name, account, createdAt, seenAt }
+    this.pairCodes = new Map(); // code -> { account, expiresAt }
+    this.devicesSavedAt = 0;
   }
 
   /** Whether anyone has to sign in at all. */
@@ -145,6 +159,12 @@ export class Auth {
     }
     const owner = readJson(this.statePath)?.owner;
     if (owner && Number.isInteger(owner.id)) this.owner = { id: owner.id, username: String(owner.username || '') };
+    const devices = readJson(this.devicesPath)?.devices;
+    if (devices && typeof devices === 'object') {
+      for (const [hash, d] of Object.entries(devices)) {
+        if (d && typeof d.account === 'string' && typeof d.id === 'string') this.devices.set(hash, d);
+      }
+    }
   }
 
   #save() {
@@ -155,6 +175,7 @@ export class Auth {
   /** Write "last seen" times that are only in memory. */
   flush() {
     if (this.sessions.size || fs.existsSync(this.sessionsPath)) this.#save();
+    if (this.devices.size) this.#saveDevices();
   }
 
   // ---------------------------------------------------------------- sessions
@@ -172,6 +193,8 @@ export class Auth {
    */
   session(req) {
     if (!this.required) return { account: 'local', open: true };
+    const bearer = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || '');
+    if (bearer) return this.#deviceSession(bearer[1]);
     const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     if (!token) return null;
     const id = hashToken(token);
@@ -215,7 +238,7 @@ export class Auth {
     setCookie(res, SESSION_COOKIE, '', { maxAgeSec: 0, secure: this.isSecure(req) });
   }
 
-  /** End every session of one account, such as after disconnecting Hardcover. */
+  /** End every session of one account, such as after disconnecting Hardcover. Its devices go too. */
   closeAccount(account) {
     let changed = false;
     for (const [id, s] of this.sessions) {
@@ -225,6 +248,92 @@ export class Auth {
       }
     }
     if (changed) this.#save();
+    let devicesChanged = false;
+    for (const [hash, d] of this.devices) {
+      if (d.account === account) {
+        this.devices.delete(hash);
+        devicesChanged = true;
+      }
+    }
+    if (devicesChanged) this.#saveDevices();
+  }
+
+  // ----------------------------------------------------------------- devices
+
+  #saveDevices() {
+    this.devicesSavedAt = Date.now();
+    writeJson(this.devicesPath, { devices: Object.fromEntries(this.devices) });
+  }
+
+  #deviceSession(token) {
+    const d = this.devices.get(hashToken(token));
+    if (!d) return null;
+    const now = Date.now();
+    d.seenAt = now;
+    if (now - this.devicesSavedAt > TOUCH_MS) this.#saveDevices();
+    return { id: `device:${d.id}`, account: d.account, createdAt: d.createdAt, device: { id: d.id, name: d.name } };
+  }
+
+  /** A code that pairs one device with this account. It works once, for ten minutes. */
+  createPairCode(account) {
+    const now = Date.now();
+    for (const [code, entry] of this.pairCodes) {
+      if (entry.expiresAt < now || entry.account === account) this.pairCodes.delete(code);
+    }
+    let code = '';
+    for (const byte of crypto.randomBytes(8)) code += PAIR_ALPHABET[byte % PAIR_ALPHABET.length];
+    const expiresAt = now + PAIR_CODE_MS;
+    this.pairCodes.set(code, { account, expiresAt });
+    return { code: `${code.slice(0, 4)}-${code.slice(4)}`, expiresAt };
+  }
+
+  /**
+   * Trade a pairing code for a device token.
+   * @returns {{token: string, device: {id: string, name: string}, account: string} | null} null when the code is not good
+   */
+  pair(code, name) {
+    const clean = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const entry = clean.length === 8 ? this.pairCodes.get(clean) : null;
+    if (!entry) return null;
+    this.pairCodes.delete(clean);
+    if (entry.expiresAt < Date.now()) return null;
+
+    const token = randomToken();
+    const now = Date.now();
+    const device = {
+      id: crypto.randomBytes(6).toString('hex'),
+      name: String(name || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 60) || 'Reader app',
+      account: entry.account,
+      createdAt: now,
+      seenAt: now,
+    };
+    this.devices.set(hashToken(token), device);
+    if (this.devices.size > MAX_DEVICES) {
+      const oldest = [...this.devices.entries()].sort((a, b) => a[1].seenAt - b[1].seenAt);
+      for (const [hash] of oldest.slice(0, this.devices.size - MAX_DEVICES)) this.devices.delete(hash);
+    }
+    this.#saveDevices();
+    return { token, device: { id: device.id, name: device.name }, account: device.account };
+  }
+
+  /** The devices paired with an account, newest first. */
+  devicesOf(account) {
+    return [...this.devices.values()]
+      .filter((d) => d.account === account)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((d) => ({ id: d.id, name: d.name, createdAt: d.createdAt, seenAt: d.seenAt }));
+  }
+
+  /** Unpair a device: its token stops working at once. */
+  removeDevice(account, id) {
+    for (const [hash, d] of this.devices) {
+      if (d.account === account && d.id === id) {
+        this.devices.delete(hash);
+        this.#saveDevices();
+        return true;
+      }
+    }
+    return false;
   }
 
   // ---------------------------------------------------------------- password
@@ -249,12 +358,17 @@ export class Auth {
       this.tries.delete(address);
       return true;
     }
+    this.countMiss(address);
+    return false;
+  }
+
+  /** Count a wrong password or pairing code against an address. */
+  countMiss(address) {
     const now = Date.now();
     if (this.tries.size > 5000) this.tries.clear();
     const t = this.tries.get(address);
     if (t && now < t.resetAt) t.count += 1;
     else this.tries.set(address, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
-    return false;
   }
 
   // --------------------------------------------------------------- hardcover
@@ -296,8 +410,9 @@ export class Auth {
  * @param {Auth} auth
  * @param {object} http helpers from the web server: sendJson, sendError, sameOrigin
  * @param {(session: object) => object} describe extra facts about the signed-in account
+ * @param {{apk?: () => string | undefined}} [extras] where the reader app can be downloaded, if it can
  */
-export function createAuthRoutes(auth, { sendJson, sendError, sameOrigin }, describe = () => ({})) {
+export function createAuthRoutes(auth, { sendJson, sendError, sameOrigin }, describe = () => ({}), extras = {}) {
   const fromApp = (req) => sameOrigin(req) && /^application\/json/i.test(req.headers['content-type'] || '');
 
   /** Returns true when the request was for this part of the API. */
@@ -310,8 +425,78 @@ export function createAuthRoutes(auth, { sendJson, sendError, sameOrigin }, desc
         signedIn: Boolean(session),
         methods: auth.methods,
         account: session ? { kind: hardcoverIdOf(session.account) ? 'hardcover' : 'local', ...describe(session) } : null,
+        device: session?.device || undefined,
       });
       return true;
+    }
+
+    // The reader app trades a pairing code for a token of its own. No session yet, so this is open.
+    if (p === '/api/pair' && req.method === 'POST') {
+      if (!/^application\/json/i.test(req.headers['content-type'] || '')) {
+        req.resume();
+        sendError(req, res, 415, 'Send the code as JSON.');
+        return true;
+      }
+      if (!auth.required) {
+        req.resume();
+        sendError(req, res, 409, 'This Shelfmark has no sign-in, so the app needs no code.');
+        return true;
+      }
+      const address = req.socket.remoteAddress || 'unknown';
+      const wait = auth.lockedFor(address);
+      if (wait) {
+        req.resume();
+        res.setHeader('Retry-After', String(wait));
+        sendError(req, res, 429, `Too many wrong codes. Try again in ${Math.ceil(wait / 60)} min.`);
+        return true;
+      }
+      readJsonBody(req)
+        .then((body) => {
+          const paired = auth.pair(body.code, body.name);
+          if (!paired) {
+            auth.countMiss(address);
+            sendError(req, res, 401, 'That code is not right, or it ran out. Make a new one in Shelfmark and try again.');
+            return;
+          }
+          console.log(`Paired the device "${paired.device.name}".`);
+          sendJson(req, res, 200, { token: paired.token, device: paired.device });
+        })
+        .catch((err) => sendError(req, res, 400, err.message));
+      return true;
+    }
+
+    // The reader app disconnecting: the device it runs on unpairs itself.
+    if (p === '/api/devices/leave' && req.method === 'POST' && session?.device) {
+      req.resume();
+      auth.removeDevice(session.account, session.device.id);
+      console.log(`The device "${session.device.name}" disconnected.`);
+      sendJson(req, res, 200, { ok: true });
+      return true;
+    }
+
+    if (p.startsWith('/api/devices') && session && !session.device) {
+      if (p === '/api/devices' && req.method === 'GET') {
+        sendJson(req, res, 200, { devices: auth.devicesOf(session.account), pairing: auth.required, apk: extras.apk?.() });
+        return true;
+      }
+      if ((p === '/api/devices/code' || p === '/api/devices/remove') && req.method === 'POST') {
+        if (!fromApp(req)) {
+          req.resume();
+          sendError(req, res, 403, 'This is only accepted from the app itself.');
+          return true;
+        }
+        readJsonBody(req)
+          .then((body) => {
+            if (p === '/api/devices/code') {
+              if (!auth.required) return sendError(req, res, 409, 'This Shelfmark has no sign-in, so the app needs no code.');
+              return sendJson(req, res, 200, auth.createPairCode(session.account));
+            }
+            if (!auth.removeDevice(session.account, String(body.id || ''))) return sendError(req, res, 404, 'That device is not paired any more.');
+            return sendJson(req, res, 200, { ok: true, devices: auth.devicesOf(session.account) });
+          })
+          .catch((err) => sendError(req, res, 400, err.message));
+        return true;
+      }
     }
 
     if (p === '/api/login' && req.method === 'POST') {

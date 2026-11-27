@@ -1,0 +1,22 @@
+Typefaces bundled with Shelfmark Reader
+
+All four are under the SIL Open Font License 1.1 (https://openfontlicense.org),
+which allows them to be bundled and used freely. They are unchanged.
+
+Literata (literata.ttf, literata-italic.ttf)
+  Copyright 2017 The Literata Project Authors (https://github.com/googlefonts/literata)
+
+Bitter (bitter.ttf, bitter-italic.ttf)
+  Copyright 2011 The Bitter Project Authors (https://github.com/solmatas/BitterPro),
+  with Reserved Font Name "Bitter Pro"
+
+Atkinson Hyperlegible Next (atkinson.ttf, atkinson-italic.ttf)
+  Copyright 2020-2024 The Atkinson Hyperlegible Next Project Authors
+  (https://github.com/googlefonts/atkinson-hyperlegible-next)
+
+Bricolage Grotesque (bricolage-grotesque.woff2)
+  Copyright The Bricolage Grotesque Project Authors
+  The Latin subset published by Fontsource (https://fontsource.org)
+
+The first three were taken from https://github.com/google/fonts (ofl/literata,
+ofl/bitter, ofl/atkinsonhyperlegiblenext).

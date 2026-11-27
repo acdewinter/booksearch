@@ -32,6 +32,7 @@
       <nav class="views" id="views" aria-label="Sections" hidden>
         <button type="button" id="nav-search" aria-current="page">Search</button>
         <button type="button" id="nav-library" hidden>Library</button>
+        <button type="button" id="nav-collection">Collection</button>
         <button type="button" id="nav-downloads">
           <span class="dot is-off" id="nav-dot" hidden></span>
           <span>Downloads</span>
@@ -115,6 +116,36 @@
       </button>
     </form>
     <div class="dialog-body" id="irc-body"></div>
+  </dialog>
+
+  <dialog class="dialog" id="collection-dialog" aria-labelledby="collection-title">
+    <form method="dialog" class="dialog-head">
+      <h2 id="collection-title"></h2>
+      <button class="icon-button" aria-label="Close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+    </form>
+    <div class="dialog-body" id="collection-body"></div>
+  </dialog>
+
+  <dialog class="dialog" id="attach-dialog" aria-labelledby="attach-title">
+    <form method="dialog" class="dialog-head">
+      <h2 id="attach-title">Which book is this?</h2>
+      <button class="icon-button" aria-label="Close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+    </form>
+    <div class="dialog-body" id="attach-body"></div>
+  </dialog>
+
+  <dialog class="dialog" id="devices-dialog" aria-labelledby="devices-title">
+    <form method="dialog" class="dialog-head">
+      <h2 id="devices-title">Reader app</h2>
+      <button class="icon-button" aria-label="Close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+    </form>
+    <div class="dialog-body" id="devices-body"></div>
   </dialog>
 
   <dialog class="dialog is-small" id="account-dialog" aria-labelledby="account-title">

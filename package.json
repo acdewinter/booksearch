@@ -1,7 +1,7 @@
 {
   "name": "shelfmark",
-  "version": "1.2.0",
-  "description": "Search an audiobook command list, request files over IRC and receive them over DCC, starting from your Hardcover library if you like.",
+  "version": "1.3.0",
+  "description": "Search a book command list, request files over IRC and receive them over DCC, keep them as a collection tied to your Hardcover library, and read them on your phone.",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,6 +13,7 @@
     "import": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/import-cli.js",
     "fake-irc": "node dev/fake-irc.js",
     "fake-hardcover": "node dev/fake-hardcover.js",
-    "test": "node --disable-warning=ExperimentalWarning --test"
+    "test": "node --disable-warning=ExperimentalWarning --test",
+    "apk": "android/build-apk.sh"
   }
 }

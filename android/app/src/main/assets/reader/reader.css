@@ -1,0 +1,100 @@
+/*
+ * What the reader adds to every chapter of a book.
+ *
+ * The chapter is laid out in columns one screen wide (the body is the column
+ * box), so "the next page" is the next column, brought into view by moving
+ * the body sideways. reader.js sets the --sm-* values from the settings.
+ */
+
+/* The typefaces that come with the app. Each is one file that holds every weight. */
+@font-face { font-family: "Literata"; src: url("fonts/literata.ttf") format("truetype"); font-weight: 200 900; font-style: normal; font-display: block; }
+@font-face { font-family: "Literata"; src: url("fonts/literata-italic.ttf") format("truetype"); font-weight: 200 900; font-style: italic; font-display: block; }
+@font-face { font-family: "Bitter"; src: url("fonts/bitter.ttf") format("truetype"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "Bitter"; src: url("fonts/bitter-italic.ttf") format("truetype"); font-weight: 100 900; font-style: italic; font-display: block; }
+@font-face { font-family: "Atkinson Hyperlegible Next"; src: url("fonts/atkinson.ttf") format("truetype"); font-weight: 200 800; font-style: normal; font-display: block; }
+@font-face { font-family: "Atkinson Hyperlegible Next"; src: url("fonts/atkinson-italic.ttf") format("truetype"); font-weight: 200 800; font-style: italic; font-display: block; }
+@font-face { font-family: "Shelfmark Grotesque"; src: url("fonts/bricolage-grotesque.woff2") format("woff2"); font-weight: 200 800; font-display: block; }
+
+html.sm {
+  height: 100% !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  background: var(--sm-bg) !important;
+  color: var(--sm-fg) !important;
+  touch-action: none;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+html.sm body {
+  box-sizing: border-box !important;
+  position: static !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: var(--sm-top) var(--sm-side) var(--sm-bottom) !important;
+  border: 0 !important;
+  overflow: visible !important;
+  column-width: calc(100vw - 2 * var(--sm-side)) !important;
+  column-gap: calc(2 * var(--sm-side)) !important;
+  column-fill: auto !important;
+  column-rule: 0 !important;
+  background: transparent !important;
+  color: var(--sm-fg) !important;
+  orphans: 2;
+  widows: 2;
+  overflow-wrap: break-word;
+  will-change: transform;
+}
+
+/* Nothing shows until the page to start on is in place. */
+html.sm:not(.sm-ready) body { opacity: 0 !important; }
+html.sm.sm-slide body { transition: transform 170ms cubic-bezier(0.2, 0.7, 0.3, 1); }
+
+/* Nothing may be wider or taller than one page. */
+html.sm img, html.sm svg, html.sm video, html.sm canvas, html.sm object, html.sm iframe {
+  max-width: 100% !important;
+  max-height: calc(100vh - var(--sm-top) - var(--sm-bottom)) !important;
+  object-fit: contain;
+  break-inside: avoid;
+}
+html.sm table { max-width: 100% !important; }
+html.sm pre { white-space: pre-wrap !important; overflow-wrap: anywhere; }
+html.sm h1, html.sm h2, html.sm h3, html.sm h4, html.sm h5, html.sm h6 { break-after: avoid; break-inside: avoid; }
+html.sm figure, html.sm tr { break-inside: avoid; }
+html.sm a { color: var(--sm-link); }
+html.sm ::selection { background: var(--sm-select); }
+
+/* Themes other than the light one do not trust the book's own colours. */
+html.sm.sm-flat * { background-color: transparent !important; box-shadow: none !important; }
+html.sm.sm-ink * { color: inherit !important; border-color: currentColor !important; text-shadow: none !important; }
+html.sm.sm-ink a, html.sm.sm-ink a * { color: var(--sm-link) !important; }
+html.sm.sm-dim img, html.sm.sm-dim video { filter: brightness(0.82); }
+
+/* The reader's choice of typeface, spacing and alignment, when it differs from the book's. */
+html.sm.sm-font body, html.sm.sm-font body *:not(pre):not(code):not(kbd):not(samp):not(tt):not(math):not(math *) {
+  font-family: var(--sm-font) !important;
+}
+html.sm.sm-lh body, html.sm.sm-lh p, html.sm.sm-lh li, html.sm.sm-lh dd, html.sm.sm-lh blockquote, html.sm.sm-lh div, html.sm.sm-lh span, html.sm.sm-lh td {
+  line-height: var(--sm-lh) !important;
+}
+html.sm.sm-justify p, html.sm.sm-justify li, html.sm.sm-justify dd, html.sm.sm-justify blockquote {
+  text-align: justify !important;
+  -webkit-hyphens: auto !important;
+  hyphens: auto !important;
+}
+html.sm.sm-left p, html.sm.sm-left li, html.sm.sm-left dd, html.sm.sm-left blockquote {
+  text-align: start !important;
+  -webkit-hyphens: manual !important;
+  hyphens: manual !important;
+}
+html.sm.sm-spaced p { margin-top: 0 !important; margin-bottom: var(--sm-para) !important; text-indent: 0 !important; }
+html.sm.sm-bold body { font-weight: 500; }

@@ -5,6 +5,8 @@ import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import zlib from 'node:zlib';
 import { Auth, createAuthRoutes, hardcoverIdOf } from './auth.js';
+import { Collection } from './collection/store.js';
+import { createCollectionRoutes } from './collection/routes.js';
 import { config } from './config.js';
 import { HardcoverClient } from './hardcover/client.js';
 import { createHardcoverRoutes } from './hardcover/routes.js';
@@ -28,6 +30,12 @@ const irc = new IrcManager({
 const hardcover = new Hardcover({
   client: new HardcoverClient({ ...config.hardcover, userAgent: `Shelfmark/${config.version || 'dev'}` }),
   dataDir: config.dataDir,
+});
+// The books you have: files in the download folder, each tied to a title.
+const collection = new Collection({
+  dataDir: config.dataDir,
+  downloadDir: config.downloadDir,
+  fetchCover: (url, stem) => hardcover.coverFromUrl(url, stem),
 });
 const auth = new Auth({
   dataDir: config.dataDir,
@@ -124,6 +132,7 @@ function boot() {
   store.load();
   auth.load();
   hardcover.load();
+  collection.load();
 
   const opened = library.open();
   if (store.lists.length === 0) {
@@ -146,7 +155,10 @@ function boot() {
 
 // ------------------------------------------------------------------ helpers
 
+const READER_APK = 'shelfmark-reader.apk';
+
 const MIME = {
+  '.apk': 'application/vnd.android.package-archive',
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -261,10 +273,14 @@ function sameOrigin(req) {
 
 const http_ = { sendJson, sendError, sameOrigin };
 const ircRoutes = createIrcRoutes(irc, http_);
-const hardcoverRoutes = createHardcoverRoutes({ auth, hardcover, library, appUrl: config.appUrl }, http_);
+const hardcoverRoutes = createHardcoverRoutes({ auth, hardcover, library, appUrl: config.appUrl, owned: () => collection.owned() }, http_);
+const collectionRoutes = createCollectionRoutes({ collection, hardcover, downloadDir: config.downloadDir }, http_);
 const authRoutes = createAuthRoutes(auth, http_, (session) => {
   const userId = hardcoverIdOf(session.account);
   return { hardcover: userId ? hardcover.describe(userId) : null };
+}, {
+  // The reader app's installer, offered for download when it was built into the public folder.
+  apk: () => (fs.existsSync(path.join(config.publicDir, READER_APK)) ? `/${READER_APK}` : undefined),
 });
 
 function statusPayload() {
@@ -391,6 +407,7 @@ function handleApi(req, res, url, session) {
   if (p === '/api/lists/apply' && req.method === 'POST') {
     return handleApply(req, res);
   }
+  if (collectionRoutes.handle(req, res, url, session)) return undefined;
   if (ircRoutes.handle(req, res, url)) return undefined;
   if (hardcoverRoutes.handle(req, res, url, session)) return undefined;
   if (req.method !== 'GET') return sendError(req, res, 405, 'Method not allowed.');
@@ -447,6 +464,12 @@ const server = http.createServer((req, res) => {
         sendJson(req, res, 401, { error: 'Sign in to continue.', signIn: true });
         return;
       }
+      // A paired reader app reaches the collection and nothing else.
+      if (session.device && !collectionRoutes.allowsDevice(req, url)) {
+        req.resume();
+        sendError(req, res, 403, 'The reader app is not allowed to do that.');
+        return;
+      }
       handleApi(req, res, url, session);
       return;
     }
@@ -462,6 +485,18 @@ const server = http.createServer((req, res) => {
 
 // Large uploads over a slow link need more than the default 5 minutes.
 server.requestTimeout = 30 * 60 * 1000;
+
+// A file asked for from a book's page is tied to that book when it arrives,
+// and every open page hears that the collection changed.
+irc.on('event', (name, item) => {
+  if (name !== 'download' || item.status !== 'done' || !item.file) return;
+  const book = collection.downloaded(item, (hardcoverId, account) => collectionRoutes.hardcoverFacts(hardcoverId, account));
+  if (book) {
+    console.log(`Added "${item.file}" to the collection as "${book.title}".`);
+    irc.emit('event', 'collected', { book: book.id, title: book.title, file: item.file });
+  }
+});
+collection.onChange(() => irc.emit('event', 'collection', { at: Date.now() }));
 
 boot();
 irc.start();

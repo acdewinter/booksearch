@@ -214,6 +214,63 @@ export function normalizeEntry(row) {
   };
 }
 
+// ----------------------------------------------------------------- search
+
+const SEARCH = `query FindBooks($query: String!, $perPage: Int!) {
+  search(query: $query, query_type: "Book", per_page: $perPage, page: 1) { results }
+}`;
+
+/**
+ * One hit of Hardcover's search -> the same facts normalizeBook() gives.
+ * The search index names things a little differently from the books table.
+ */
+export function normalizeSearchHit(hit) {
+  const doc = hit?.document ?? hit;
+  if (!doc || typeof doc !== 'object') return null;
+  const book = normalizeBook({
+    ...doc,
+    id: number(doc.id),
+    cached_contributors: doc.contributions,
+    contributions: undefined,
+    cached_image: doc.image,
+    image: undefined,
+    cached_featured_series: doc.featured_series,
+    cached_tags: { Genre: doc.genres },
+  });
+  if (!book) return null;
+  if (!book.authors.length) book.authors = list(doc.author_names).map(text).filter(Boolean).slice(0, 4);
+  if (!book.series && text(list(doc.series_names)[0])) {
+    book.series = { name: text(doc.series_names[0]), position: number(doc.featured_series_position) };
+  }
+  return book;
+}
+
+/**
+ * Look for books in the whole of Hardcover, the way its own search box does.
+ * Needs a sign-in with the scope read:catalog:search.
+ *
+ * @param {(query: string, variables: object) => Promise<object>} gql
+ * @param {string} query
+ * @param {number} [limit]
+ */
+export async function searchBooks(gql, query, limit = 12) {
+  const data = await gql(SEARCH, { query: String(query).slice(0, 200), perPage: limit });
+  let results = data?.search?.results;
+  if (typeof results === 'string') {
+    try {
+      results = JSON.parse(results);
+    } catch {
+      results = null;
+    }
+  }
+  const seen = new Set();
+  return list(results?.hits ?? results).map(normalizeSearchHit).filter((book) => {
+    if (!book || seen.has(book.id)) return false;
+    seen.add(book.id);
+    return true;
+  });
+}
+
 // ------------------------------------------------------------------- sync
 
 /**

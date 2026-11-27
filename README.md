@@ -24,6 +24,11 @@ title, series or show. Then either:
 Connected to your [Hardcover](https://hardcover.app) account, it also shows
 your library, and picking a book there looks for it in the lists.
 
+What you download becomes your **collection**: each file tied to its title,
+with the cover and details from Hardcover. The epubs in it can be read on an
+Android phone with **Shelfmark Reader**, the companion app in `android/`,
+which keeps the books on the phone and reports back how far you are.
+
 ## Using it
 
 - **Search**: type any words. Every word has to appear in the file name or in
@@ -73,6 +78,82 @@ authors, series, ratings and dates.
 - The library is copied from Hardcover when you sign in and again when you
   open the page after six hours, or when you press **Sync now**. Nothing is
   ever changed on Hardcover.
+
+### Your collection
+
+The **Collection** page shows the books you actually have: the files in your
+download folder, each tied to a title. A file gets its title in one of two
+ways.
+
+- **From a book in your Library.** Pick the book, and get a file for it from
+  the search that opens. When the download finishes, the file is added to the
+  collection under that book by itself. (The panel above the results says so,
+  and says "Have it" once you do.)
+- **From the file.** Anything else in the download folder waits under **Not
+  sorted yet**. Press **Add to collection** and say which book it is: an epub
+  tells its own title and author, which is looked up for you; for other files
+  the file name is used. Pick the book from the results, or change the words
+  and look again. A book that is not on Hardcover can be added by hand, or
+  with what the file says about itself.
+
+Good to know:
+
+- The lookup always searches the books in your Hardcover library. To find
+  *any* book on Hardcover, the app needs one more permission: on Hardcover,
+  open your app under **Settings → Hardcover API → Developer Apps** and allow
+  the scope `read:catalog:search`, then follow the "sign in once more" link
+  in the lookup. Nothing is ever changed on Hardcover.
+- A title can have several files (an epub and the audiobook, say). Picking a
+  book in the collection shows them, with **Save** to download one to the
+  computer you are at, **Untie** to take a file off its title, and **Find
+  more files** to look in the lists again.
+- Files stay where they are in the download folder. The collection only
+  remembers which file is which book, so removing a book from it deletes
+  nothing. A file you rename or move keeps its title; a file you delete is
+  shown as missing.
+- Books that are in your collection are marked **Have it** on the Library
+  page, which also gets an **In my collection** tab.
+- The download folder and the collection are shared by everyone who can sign
+  in. How far a book was read is kept per person.
+
+### Reading on your phone
+
+**Shelfmark Reader** is an Android app for the epubs in your collection. It
+lists them with their covers, brings the ones you pick onto the phone so they
+can be read without a connection, and tells Shelfmark how far you are, which
+the Collection page then shows.
+
+Getting it going:
+
+1. Build the app (see [The reader app](#the-reader-app) below) and install
+   the APK on your phone.
+2. In Shelfmark, open **Collection → Reader app**. It shows the address to
+   give the app and a pairing code that works once, for ten minutes.
+3. Type both into the app. Or do step 2 in the phone's own browser and press
+   **Open in the reader app**: the app opens already paired.
+
+A paired phone can read the collection, fetch its files and report progress,
+and nothing else: it cannot search the lists, ask for files or see the IRC
+side. The **Reader app** dialog lists the paired devices and removes any of
+them, which ends that phone's access at once. A Shelfmark without any
+sign-in needs no code, only the address.
+
+In the app:
+
+- **Touch a book** to bring it onto the phone and open it. Touch and hold for
+  removing it from the phone again. Books you are reading come first.
+- **Turn pages** by touching the right or left side of the page, by swiping,
+  or with the volume keys. **Touch the middle** for the bars: the contents,
+  a slider through the whole book, and **Aa** for the settings.
+- **Aa** has the brightness (from 100% down to 1%, which is darker than the
+  phone's own slider goes), four themes (Light, Stone, Dark, and Night, which
+  takes the blue out of everything on screen), a slider that takes out as
+  much blue as you like in the other themes, the typeface, text size, line
+  spacing, margins and alignment, and how pages turn.
+- **Progress** is saved on the phone as you read and sent to Shelfmark every
+  twenty seconds or so and when you leave the book. Without a connection it
+  is sent the next time there is one. If the book was read further somewhere
+  else, opening it offers to go there.
 
 ### Downloading over IRC
 
@@ -138,6 +219,39 @@ HARDCOVER_CLIENT_ID=practice HARDCOVER_CLIENT_SECRET=practice \
   HARDCOVER_API_URL=http://127.0.0.1:4010 HARDCOVER_WEB_URL=http://127.0.0.1:4010 npm start
 ```
 
+## The reader app
+
+The Android app is in `android/`. It is written in Kotlin and is not in any
+store: you build the APK yourself and copy it to the phone.
+
+```
+android/build-apk.sh
+```
+
+That needs [Android Studio](https://developer.android.com/studio) installed
+(for the Android SDK and its Java), nothing else. It runs the app's tests
+and leaves `android/shelfmark-reader.apk`. Copy that file to the phone and
+open it there (Android asks once whether your file manager may install
+apps), or with the phone on a USB cable: `adb install -r android/shelfmark-reader.apk`.
+
+`android/build-apk.sh --publish` also copies the APK into `public/`, and
+then Shelfmark offers it for download in the **Reader app** dialog, which is
+the easy way to get it onto the phone.
+
+The APK is signed with the key Android Studio keeps on the computer that
+built it (`~/.android/debug.keystore`). An update built on the same computer
+installs over the old one. One built somewhere else is refused until the app
+is uninstalled first; the books on the phone go with it, what you have read
+does not, since Shelfmark has that.
+
+The page engine (how a chapter becomes pages, and how they turn) is plain
+JavaScript and CSS in `android/app/src/main/assets/reader`. To try it in a
+browser on any epub, without a phone:
+
+```
+node dev/reader-harness.js path/to/book.epub
+```
+
 ## Signing in
 
 Out of the box the app is open to anyone who can reach it. There are two ways
@@ -154,7 +268,10 @@ to close it, and they can be combined.
    on your own computer, `https://books.example.com/oauth/callback` once it is
    deployed. Hardcover requires `https` for anything but localhost.
 3. Allow it the scopes `read:me:content`, `read:library` and `read:lists`.
-   Device authorization can stay off.
+   Device authorization can stay off. Also allow `read:catalog:search` if
+   you want to tie files to books that are not in your library (see
+   [Your collection](#your-collection)); the app only asks for it when you
+   tell it to.
 4. Put the client id and the secret in `HARDCOVER_CLIENT_ID` and
    `HARDCOVER_CLIENT_SECRET`, and restart the app.
 
@@ -172,8 +289,11 @@ Who gets in with Hardcover:
 Sessions last 30 days and are kept in `sessions.json`. The Hardcover tokens
 (in `hardcover/accounts.json`) only allow reading; **Disconnect Hardcover**
 under the account button revokes them and deletes the copy of your library.
-The IRC connection and the download queue are shared by everyone who can
-sign in.
+The IRC connection, the download queue and the collection are shared by
+everyone who can sign in. Phones paired with the reader app are kept in
+`devices.json` (only a fingerprint of each phone's token, not the token) and
+belong to the account that paired them: disconnecting Hardcover unpairs them
+too.
 
 ## Deploying
 
@@ -217,6 +337,11 @@ in the data folder.
   `service.js` keeps the tokens, the synced libraries and the covers, and
   `routes.js` is their part of the web API.
 - `server/match.js` turns a book into the searches that find it in the lists.
+- `server/collection/store.js` is the collection: which file in the download
+  folder is which title, and how far each was read. `routes.js` next to it is
+  its part of the web API, including what the reader app uses. `server/epub.js`
+  reads an epub's own title, author and cover, with `server/zip.js` to open it.
+- Pairing a phone lives in `server/auth.js`, next to the sessions.
 - `server/irc/client.js` is the IRC connection, `server/irc/dcc.js` receives
   one file, and `server/irc/manager.js` ties them to the queue and the
   settings. `server/irc/routes.js` is their part of the web API, including
@@ -229,8 +354,14 @@ in the data folder.
   `lists.json` (the list files you loaded, kept so the database can be
   rebuilt after an app update), `irc-settings.json` and `irc-state.json`
   (the download queue), `sessions.json` and `auth.json` (who is signed in, and
-  who owns the app), and `hardcover/` (tokens, one synced library per account,
-  and the covers).
+  who owns the app), `hardcover/` (tokens, one synced library per account,
+  and the covers), `collection.json` and `collection-covers/` (the collection
+  and reading progress), and `devices.json` (the paired phones).
+- `android/` is the reader app. `data/Api.kt` talks to the server and
+  `data/Library.kt` keeps what the phone knows; `epub/EpubBook.kt` opens a
+  book; `reader/` shows it (the web view that serves the book out of the epub,
+  the screen's brightness and colour, the settings); `ui/` is the list of
+  books and the pairing screen.
 
 ## Tests
 
@@ -240,7 +371,11 @@ npm test
 
 The IRC tests run against the practice server in `dev/fake-irc.js` and the
 Hardcover tests against the one in `dev/fake-hardcover.js`, so they need no
-network.
+network. The reader app has tests of its own (opening epubs, tidy and
+awkward ones), which `android/build-apk.sh` runs before it builds.
+
+`node dev/make-epub.js "data/downloads/Practice Book.epub"` writes a small
+epub into the download folder, to try the collection and the reader app with.
 
 ## Fonts
 

@@ -14,3 +14,12 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+
+# The reader app (android/): what building it leaves behind, and where this
+# machine keeps the Android SDK.
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.kotlin/
+android/*.apk

@@ -68,7 +68,7 @@ export class HardcoverClient {
   }
 
   /** Where to send the browser so the person can approve the app. */
-  authorizeUrl({ state, challenge, redirectUri }) {
+  authorizeUrl({ state, challenge, redirectUri, scope = this.scopes }) {
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: this.clientId,
@@ -76,7 +76,7 @@ export class HardcoverClient {
       state,
       code_challenge: challenge,
       code_challenge_method: 'S256',
-      scope: this.scopes,
+      scope,
     });
     return `${this.webUrl}/oauth2/authorize?${params}`;
   }

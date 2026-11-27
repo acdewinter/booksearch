@@ -5,8 +5,9 @@ import {
   activeCount, connSummary, irc, ircPost, isActive, itemFor, mountDownloads, onIrc,
   requestCommands, startIrc, unmountDownloads,
 } from './downloads.js';
+import { collectionChanged, forgetCollection, mountCollection, openReaderApp, unmountCollection } from './collection.js';
 import {
-  audioLength, coverEl, day, forgetLibrary, mountLibrary, seriesLabel, statusEl, unmountLibrary,
+  audioLength, coverEl, day, forgetLibrary, mountLibrary, seriesLabel, staleLibrary, statusEl, unmountLibrary,
 } from './library.js';
 import { hardcoverSignInUrl, hardcoverUser, loadSession, session, signInProblem } from './session.js';
 
@@ -42,6 +43,7 @@ const els = {
   views: $('views'),
   navSearch: $('nav-search'),
   navLibrary: $('nav-library'),
+  navCollection: $('nav-collection'),
   navDownloads: $('nav-downloads'),
   accountButton: $('account-button'),
   accountName: $('account-name'),
@@ -62,7 +64,7 @@ function readUrl() {
   state.path = p.get('in') || '/';
   state.all = p.get('all') === '1';
   const v = p.get('v');
-  state.view = v === 'downloads' || v === 'library' ? v : 'search';
+  state.view = v === 'downloads' || v === 'library' || v === 'collection' ? v : 'search';
   state.book = Number.parseInt(p.get('book') || '', 10) || 0;
   state.shelf = p.get('shelf') || '';
   state.list = p.get('list') || '';
@@ -76,7 +78,7 @@ function writeUrl(push) {
     if (state.list) p.set('list', state.list);
   }
   if (state.view === 'search' && state.book) p.set('book', String(state.book));
-  if (state.view !== 'library') {
+  if (state.view === 'search' || state.view === 'downloads') {
     if (state.q) p.set('q', state.q);
     if (state.path !== '/') p.set('in', state.path);
     if (state.all) p.set('all', '1');
@@ -321,6 +323,9 @@ async function requestRow(row) {
   try {
     const [item] = await requestCommands([command]);
     flashRows([row]);
+    // Asked for with a book open: the file is added to the collection under that book when it arrives.
+    const forBook = state.book ? found.get(`${state.book}|${state.all ? 1 : 0}`) : null;
+    if (forBook) postJson('/api/collection/expect', { commands: [command], book: state.book }).catch(() => {});
     if (item.already) {
       showTray('Already in the queue', name, showDownloads);
       return;
@@ -777,12 +782,12 @@ function syncChrome() {
   const ready = status?.state === 'ready';
   els.searchbar.hidden = !(searching && ready);
   els.foot.hidden = !(searching && ready);
-  for (const [name, button] of [['search', els.navSearch], ['library', els.navLibrary], ['downloads', els.navDownloads]]) {
+  for (const [name, button] of [['search', els.navSearch], ['library', els.navLibrary], ['collection', els.navCollection], ['downloads', els.navDownloads]]) {
     if (state.view === name) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
   els.keyAction.textContent = getMode() ? 'get' : 'copy';
-  document.title = { search: 'Shelfmark', library: 'Library · Shelfmark', downloads: 'Downloads · Shelfmark' }[state.view];
+  document.title = { search: 'Shelfmark', library: 'Library · Shelfmark', collection: 'Collection · Shelfmark', downloads: 'Downloads · Shelfmark' }[state.view];
 }
 
 /** The connection light and the count next to "Downloads" in the header. */
@@ -807,10 +812,20 @@ function show() {
   }
   if (state.view === 'downloads') {
     unmountLibrary();
+    unmountCollection();
     mountDownloads(els.main);
     return;
   }
   unmountDownloads();
+  if (state.view === 'collection') {
+    unmountLibrary();
+    mountCollection(els.main, {
+      // More files of a book: the same search the Library page starts.
+      onFind: hardcoverUser() ? (book) => openBook({ id: book.hardcoverId }, { fallback: `${book.title} ${book.authors[0] || ''}`.trim() }) : null,
+    });
+    return;
+  }
+  unmountCollection();
   if (state.view === 'library') {
     mountLibrary(els.main, {
       shelf: state.shelf,
@@ -901,13 +916,17 @@ function findBook(id, all) {
   return found.get(key);
 }
 
-/** A book was picked on the Library page: show the search that finds it. */
-async function openBook(book) {
+/**
+ * A book was picked on the Library page: show the search that finds it.
+ * `fallback` is what to search for when the book is not in the Hardcover library (any more).
+ */
+async function openBook(book, { fallback = '' } = {}) {
   try {
     const match = await findBook(book.id, state.all);
     navigate({ book: book.id, q: match.best || match.queries[0]?.q || '', path: '/' });
   } catch (err) {
-    toast(err.message);
+    if (fallback && err.status === 404) navigate({ book: 0, q: fallback, path: '/' });
+    else toast(err.message);
   }
 }
 
@@ -942,6 +961,11 @@ function bookPanel(match, shownFiles) {
     book.lists?.length ? `In ${book.lists.length === 1 ? 'your list' : 'your lists'} ${book.lists.map((l) => `“${l}”`).join(', ')}` : '',
   ].filter(Boolean);
   const others = (book.contributors || []).map((c) => `${c.name} (${c.role.toLowerCase()})`);
+  const have = match.owned
+    ? h('p', { class: 'bookcard-facts' },
+      h('span', { class: 'status is-have' }, 'Have it'), ` ${match.owned.formats.map((f) => f.toUpperCase()).join(', ')} in your `,
+      h('button', { type: 'button', class: 'text-button', onclick: () => navigate({ view: 'collection' }) }, 'collection'), '.')
+    : getMode() ? h('p', { class: 'bookcard-facts' }, 'A file you get from here is added to your collection under this title.') : null;
 
   const description = book.description ? h('p', { class: 'bookcard-text' }, book.description) : null;
   const moreButton = description ? h('button', {
@@ -996,6 +1020,7 @@ function bookPanel(match, shownFiles) {
       mine.length ? h('p', { class: 'bookcard-facts' }, mine.join(' · ')) : null,
       others.length ? h('p', { class: 'bookcard-facts' }, `With ${others.join(', ')}`) : null,
       book.genres?.length ? h('p', { class: 'bookcard-facts' }, book.genres.join(', ')) : null,
+      have,
       description,
       h('p', { class: 'bookcard-links' },
         moreButton,
@@ -1072,6 +1097,7 @@ window.addEventListener('popstate', () => {
 
 els.navSearch.addEventListener('click', () => navigate({ view: 'search' }));
 els.navLibrary.addEventListener('click', () => navigate({ view: 'library' }));
+els.navCollection.addEventListener('click', () => navigate({ view: 'collection' }));
 els.navDownloads.addEventListener('click', () => navigate({ view: 'downloads' }));
 
 els.main.addEventListener('click', (e) => {
@@ -1537,6 +1563,16 @@ async function init() {
 
 // Keep the page in step with the IRC side: the header light, and the label on every file row.
 onIrc((kind, payload) => {
+  if (kind === 'collected') {
+    toast(`Added to your collection: ${payload.title}`, { done: true });
+    return;
+  }
+  if (kind === 'collection') {
+    found.clear(); // what each book's panel says about having it
+    staleLibrary();
+    collectionChanged();
+    return;
+  }
   renderNav();
   if (kind === 'all') {
     syncChrome();
@@ -1587,6 +1623,13 @@ function renderAccountDialog() {
     out.push(h('p', null, 'Connect your Hardcover account to see your library here and look for its books in the lists.'));
   }
   const actions = h('div', { class: 'form-actions' });
+  actions.append(h('button', {
+    type: 'button', class: 'button is-quiet',
+    onclick: () => {
+      els.accountDialog.close();
+      openReaderApp();
+    },
+  }, 'Reader app'));
   if (session.methods.hardcover && !user) {
     actions.append(h('a', { class: 'button is-primary', href: hardcoverSignInUrl('/?v=library') }, 'Connect Hardcover'));
   }
@@ -1617,6 +1660,7 @@ function renderAccountDialog() {
         try {
           await postJson('/api/hardcover/disconnect');
           forgetLibrary();
+          forgetCollection();
           location.assign('/');
         } catch (err) {
           toast(err.message);

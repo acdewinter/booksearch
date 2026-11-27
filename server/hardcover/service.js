@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { HardcoverError } from './client.js';
-import { fetchLibrary } from './library.js';
+import { fetchLibrary, searchBooks } from './library.js';
 
 const REFRESH_EARLY_MS = 5 * 60 * 1000;
 const STALE_MS = 6 * 60 * 60 * 1000;
@@ -84,7 +84,21 @@ export class Hardcover {
   describe(userId) {
     const a = this.accounts.get(userId);
     if (!a) return null;
-    return { id: a.id, username: a.username, name: a.name, signInAgain: Boolean(a.signInAgain) };
+    return { id: a.id, username: a.username, name: a.name, signInAgain: Boolean(a.signInAgain), catalog: this.canSearch(userId) };
+  }
+
+  /**
+   * Whether this account's sign-in allows looking up any book on Hardcover,
+   * not only the ones in its library. That takes a scope of its own.
+   */
+  canSearch(userId) {
+    const scope = this.accounts.get(userId)?.tokens?.scope || '';
+    return /(^|\s)read:catalog(:search)?(\s|$)/.test(scope);
+  }
+
+  /** Look for books in the whole of Hardcover. Throws HardcoverError when that is not allowed or fails. */
+  search(userId, query, limit = 12) {
+    return searchBooks((q, variables) => this.gql(userId, q, variables), query, limit);
   }
 
   /** Remember an account that just signed in. */
@@ -143,7 +157,8 @@ export class Hardcover {
         .then((fresh) => {
           const current = this.accounts.get(userId);
           if (current) {
-            current.tokens = { ...fresh, refreshToken: fresh.refreshToken || tokens.refreshToken };
+            // An answer without a scope means the scope did not change.
+            current.tokens = { ...fresh, refreshToken: fresh.refreshToken || tokens.refreshToken, scope: fresh.scope || tokens.scope || '' };
             this.#saveAccounts();
           }
           return fresh.accessToken;
@@ -296,6 +311,19 @@ export class Hardcover {
       this.coverJobs.set(stem, job);
     }
     return job;
+  }
+
+  /**
+   * Fetch a cover from an address Hardcover gave, for a book that is not in
+   * anyone's library here (the collection keeps its own covers).
+   * @param {string} url
+   * @param {string} stem where to keep it, without the extension
+   * @returns {Promise<{file: string, type: string} | null>}
+   */
+  async coverFromUrl(url, stem) {
+    if (!url || !this.#coverAllowed(url)) return null;
+    if (fs.existsSync(`${stem}.none`)) return null;
+    return this.#withCoverSlot(() => this.#downloadCover(url, stem));
   }
 
   #coverAllowed(url) {

@@ -1,6 +1,7 @@
 // A stand-in for Hardcover, for trying the sign-in and the Library page
 // without touching the real service. It speaks just enough OAuth (code + PKCE,
-// rotating refresh tokens) and GraphQL (me, user_books, lists, list_books).
+// rotating refresh tokens) and GraphQL (me, user_books, lists, list_books,
+// and search for a sign-in with the scope read:catalog:search).
 //
 //   npm run fake-hardcover
 //
@@ -32,6 +33,14 @@ const BOOKS = [
   b(110, 'Good Omens: The Nice and Accurate Prophecies of Agnes Nutter, Witch', ['Terry Pratchett', 'Neil Gaiman'], { year: 1990, pages: 412, rating: 4.25, genres: ['Fantasy', 'Humor'] }),
   b(111, 'The First Phone Call from Heaven', ['Mitch Albom'], { year: 2013, pages: 323, rating: 3.7, genres: ['Fiction'] }),
   b(112, 'The Snowman', ['Jo Nesbø'], { series: ['Harry Hole', 7], year: 2007, pages: 383, rating: 4.0, genres: ['Crime'] }),
+];
+
+// Known to Hardcover but in nobody's library here: only the search finds them.
+const CATALOG = [
+  b(201, 'The Well of Ascension', ['Brandon Sanderson'], { series: ['Mistborn', 2], year: 2007, pages: 590, rating: 4.37, genres: ['Fantasy'] }),
+  b(202, 'Guards! Guards!', ['Terry Pratchett'], { series: ['Discworld', 8], year: 1989, pages: 376, rating: 4.33, genres: ['Fantasy', 'Humor'] }),
+  b(203, 'Piranesi', ['Susanna Clarke'], { year: 2020, pages: 272, rating: 4.24, genres: ['Fantasy'] }),
+  b(204, 'No Good Dragon Goes Unpunished', ['Rachel Aaron'], { series: ['Heartstrikers', 3], year: 2016, pages: 502, rating: 4.4, genres: ['Fantasy'] }),
 ];
 
 const ENTRIES = [
@@ -141,6 +150,45 @@ export async function startFakeHardcover(o = {}) {
     };
   }
 
+  /** A book the way the search index holds it. */
+  function searchDocument(book) {
+    const full = bookJson(book);
+    return {
+      id: String(book.id),
+      title: full.title,
+      subtitle: full.subtitle,
+      slug: full.slug,
+      description: full.description,
+      author_names: book.authors,
+      contributions: full.cached_contributors,
+      image: full.cached_image,
+      featured_series: full.cached_featured_series,
+      featured_series_position: book.series?.[1] ?? null,
+      series_names: book.series ? [book.series[0]] : [],
+      release_year: full.release_year,
+      pages: full.pages,
+      rating: full.rating,
+      ratings_count: full.ratings_count,
+      users_count: full.users_count,
+      genres: book.genres || [],
+      alternative_titles: full.alternative_titles,
+    };
+  }
+
+  function search(variables) {
+    const wanted = String(variables.query || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1);
+    const hits = [...BOOKS, ...CATALOG]
+      .map((book) => {
+        const hay = `${book.title} ${book.authors.join(' ')} ${book.series?.[0] || ''}`.toLowerCase();
+        return { book, score: wanted.filter((w) => hay.includes(w)).length };
+      })
+      .filter((h) => h.score > 0)
+      .sort((x, y) => y.score - x.score)
+      .slice(0, variables.perPage || 25)
+      .map((h) => ({ document: searchDocument(h.book) }));
+    return { data: { search: { results: { found: hits.length, hits } } } };
+  }
+
   function graphql(query, variables) {
     for (const key of missing) {
       const [type, field] = key.split('.');
@@ -150,6 +198,7 @@ export async function startFakeHardcover(o = {}) {
     }
     const page = (rows) => rows.slice(variables.offset || 0, (variables.offset || 0) + (variables.limit || rows.length));
     if (/\bme\s*\{/.test(query)) return { data: { me: [user] } };
+    if (/\bsearch\s*\(/.test(query)) return search(variables);
     if (/\buser_books\s*\(/.test(query)) {
       const rows = ENTRIES.map(([bookId, status, rating, added, finished], i) => ({
         id: 7000 + i,
@@ -200,6 +249,9 @@ export async function startFakeHardcover(o = {}) {
       back.searchParams.set('iss', origin);
       if (o.deny) {
         back.searchParams.set('error', 'access_denied');
+      } else if (o.noCatalog && /read:catalog/.test(q.get('scope') || '')) {
+        // As when the developer app on Hardcover does not allow that scope.
+        back.searchParams.set('error', 'invalid_scope');
       } else {
         const code = crypto.randomBytes(12).toString('hex');
         codes.set(code, { challenge: q.get('code_challenge'), redirectUri: q.get('redirect_uri'), scope: q.get('scope') || '' });
@@ -256,6 +308,9 @@ export async function startFakeHardcover(o = {}) {
       stats.lastQuery = body.query || '';
       if (/\buser_books\s*\(/.test(body.query) && !/read:library/.test(token.scope)) {
         return json(res, 403, { error: 'insufficient_scope', error_description: 'The token is missing a scope.', scope: 'read:library' });
+      }
+      if (/\bsearch\s*\(/.test(body.query) && !/read:catalog/.test(token.scope)) {
+        return json(res, 403, { error: 'insufficient_scope', error_description: 'The token is missing a scope.', scope: 'read:catalog:search' });
       }
       return json(res, 200, graphql(body.query || '', body.variables || {}));
     }

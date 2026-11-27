@@ -4,8 +4,11 @@ Shelfmark is one small Node.js program with no packages to install. It keeps
 two kinds of things on disk:
 
 - **Its own data** (`DATA_DIR`): the search database, the list files you
-  uploaded, your IRC settings and the download queue.
-- **Downloaded files** (`DOWNLOAD_DIR`): whatever arrives over IRC.
+  uploaded, your IRC settings, the download queue, and the collection (which
+  file is which book, and how far each was read).
+- **Downloaded files** (`DOWNLOAD_DIR`): whatever arrives over IRC. This
+  folder is also what the Collection page and the reader app show, so it is
+  worth mounting somewhere that lasts.
 
 ## Where to run it
 
@@ -264,7 +267,15 @@ Skip all of this until a download fails with a message that mentions
   loading, and 550 MB on disk. The database is built again each time a list
   is added, replaced or removed, and for a moment the old and the new one
   exist side by side, so allow about 1 GB of disk for the data folder.
-- **Backups**: the lists can be uploaded again. The file `irc-settings.json` in
+- **The reader app** talks to the same address you open Shelfmark at. Over
+  the internet that should be an `https://` address; on the home network a
+  plain `http://192.168.x.x:3000` works too. It fetches whole books, so a
+  proxy in front must allow answers of a few hundred megabytes, and it needs
+  the `Authorization` header passed through (proxies do that unless told not
+  to).
+- **Backups**: `collection.json` in the data folder is the one file that is
+  work to redo: it holds which file is which book and where everyone is in
+  their books. The lists can be uploaded again. The file `irc-settings.json` in
   the data folder holds your IRC settings, including any passwords you saved,
   and `hardcover/accounts.json` holds the tokens for your Hardcover account
   (they can read your library, nothing else). Treat the data folder as private.

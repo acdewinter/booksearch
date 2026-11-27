@@ -32,6 +32,7 @@ export function signInProblem(code) {
     case 'not-allowed': return 'That Hardcover account is not allowed to use this app.';
     case 'password-first': return 'Sign in with the app password first, then connect Hardcover. The first account to connect becomes the owner.';
     case 'scope': return 'Hardcover did not let this app read your profile. Allow the scope read:me:content on the app at hardcover.app, then try again.';
+    case 'catalog-scope': return 'Hardcover did not grant the search scope. On hardcover.app, open your app under Developer Apps and allow read:catalog:search, then try again.';
     case 'unavailable': return 'Signing in with Hardcover is not set up on this server.';
     case 'failed': return 'Signing in with Hardcover did not work. Try again; if it keeps failing, check the client id, the secret and the redirect address.';
     default: return '';

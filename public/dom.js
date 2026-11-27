@@ -40,8 +40,9 @@ export function icon(name) {
   return svg;
 }
 
-export function toast(message) {
-  const el = h('div', { class: 'toast' }, message);
+/** A short note at the bottom of the page. `done` is for good news; the default look is for problems. */
+export function toast(message, { done = false } = {}) {
+  const el = h('div', { class: `toast${done ? ' is-done' : ''}` }, message);
   $('toasts').append(el);
   setTimeout(() => el.remove(), 6000);
 }

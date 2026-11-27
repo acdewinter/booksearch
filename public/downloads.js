@@ -22,7 +22,7 @@ const MAX_LOG_LINES = 700;
 const listeners = new Set();
 let byCommand = new Map();
 
-/** Call fn(kind, payload) whenever something changes. Kinds: all, conn, settings, folder, download, remove. */
+/** Call fn(kind, payload) whenever something changes. Kinds: all, conn, settings, folder, download, remove, collected, collection. */
 export function onIrc(fn) {
   listeners.add(fn);
 }
@@ -100,6 +100,9 @@ export function startIrc() {
     }
     announce('remove', item);
   });
+  // A finished download was added to the collection under the book it was asked for.
+  on('collected', (payload) => announce('collected', payload));
+  on('collection', (payload) => announce('collection', payload));
   on('log', (line) => {
     irc.log.push(line);
     if (irc.log.length > MAX_LOG_LINES) irc.log.splice(0, irc.log.length - MAX_LOG_LINES);
