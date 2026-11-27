@@ -7,7 +7,10 @@
 #                                    itself offers it for download (Collection,
 #                                    then Reader app)
 #
-# Needs the Android SDK (Android Studio brings it) and Java 17 or newer.
+# Needs the Android SDK (Android Studio brings it) and Java 17 or newer, so
+# run it on your own computer, not on the server Shelfmark is hosted on. The
+# server only needs the finished file: after --publish, commit
+# public/shelfmark-reader.apk and update the server as usual.
 set -e
 cd "$(dirname "$0")"
 
@@ -29,6 +32,14 @@ if [ ! -f local.properties ] && [ -z "$ANDROID_HOME" ]; then
       break
     fi
   done
+fi
+
+# Building needs Java and the Android SDK, which a server running Shelfmark has no use for.
+if [ -z "$JAVA_HOME" ] && ! command -v java >/dev/null 2>&1; then
+  echo "This computer has no Java, so the app cannot be built here." >&2
+  echo "Build it on the computer that has Android Studio (android/build-apk.sh --publish)," >&2
+  echo "commit public/shelfmark-reader.apk, and update the server from that." >&2
+  exit 1
 fi
 
 ./gradlew --console=plain :app:testDebugUnitTest :app:assembleRelease

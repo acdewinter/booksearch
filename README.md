@@ -236,7 +236,10 @@ apps), or with the phone on a USB cable: `adb install -r android/shelfmark-reade
 
 `android/build-apk.sh --publish` also copies the APK into `public/`, and
 then Shelfmark offers it for download in the **Reader app** dialog, which is
-the easy way to get it onto the phone.
+the easy way to get it onto the phone. Run it on the computer that has
+Android Studio, not on the server: commit `public/shelfmark-reader.apk`,
+push, and update the server the way you always do (`git pull` and the
+install script, or a redeploy). The server needs no Java, only that file.
 
 The APK is signed with the key Android Studio keeps on the computer that
 built it (`~/.android/debug.keystore`). An update built on the same computer
